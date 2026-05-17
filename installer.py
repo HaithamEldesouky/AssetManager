@@ -179,7 +179,7 @@ class InstallerApp:
                   activebackground=ACCENT2).pack(fill="x", padx=24, pady=(8, 4))
 
         tk.Label(body,
-                 text="Asset Manager  \u2014  For SD department internal use only.",
+                 text="Asset Manager  \u2014  Internal IT asset tracking system.",
                  bg=BG, fg="#3d5470",
                  font=("Segoe UI", 8)).pack(pady=(4, 12))
 
