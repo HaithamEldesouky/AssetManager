@@ -34,9 +34,9 @@ def save_cfg(cfg):
 
 TEAM_MEMBERS = [
     "Admin User",
-    "Engineer3 Sherif",
-    "Engineer1 Amin",
-    "Engineer2 Eldahrawy",
+    "Engineer3",
+    "Engineer1",
+    "Engineer2",
 ]
 
 ASSET_TYPES = ["Laptop", "Desktop", "Mobile", "Tablet", "Screen", "UPS", "Server",
