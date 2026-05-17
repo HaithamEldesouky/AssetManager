@@ -27,9 +27,9 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
 TEAM_MEMBERS = [
     "Admin User",
-    "Engineer3 Sherif",
-    "Engineer1 Amin",
-    "Engineer2 Eldahrawy",
+    "Engineer3",
+    "Engineer1",
+    "Engineer2",
 ]
 
 DEFAULT_CFG = {

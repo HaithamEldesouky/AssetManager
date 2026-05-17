@@ -19,9 +19,9 @@ BUNDLED_EXES = {
 
 TEAM_MEMBERS = [
     "Admin User",
-    "Engineer3 Sherif",
-    "Engineer1 Amin",
-    "Engineer2 Eldahrawy",
+    "Engineer3",
+    "Engineer1",
+    "Engineer2",
 ]
 
 DEFAULT_SERVER_URL = "http://asset-server:8080"
