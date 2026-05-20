@@ -3,12 +3,13 @@ Asset Manager — Unified Installer
 Bundles AssetServer.exe, StorekeeperApp.exe, NotifierApp.exe.
 User picks which component to install; installer writes config.json
 and copies the right exe to a chosen directory.
-Notifier install is protected by a Setup PIN.
+Notifier install verifies the admin password live against the server.
 """
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-import os, sys, json, shutil, threading, hashlib, requests, textwrap
+import os, sys, json, shutil, threading, hashlib, requests, textwrap, ssl
+from requests.adapters import HTTPAdapter
 
 # ─── Bundled exe names (must match build.bat output names) ────────────────────
 BUNDLED_EXES = {
@@ -18,13 +19,13 @@ BUNDLED_EXES = {
 }
 
 TEAM_MEMBERS = [
-    "Admin User",
-    "Engineer3",
-    "Engineer1",
-    "Engineer2",
+    "Engineer 1",
+    "Engineer 2",
+    "Engineer 3",
+    "Engineer 4",
 ]
 
-DEFAULT_SERVER_URL = "http://asset-server:8080"
+DEFAULT_SERVER_URL = "https://asset-server:8081"
 
 
 # ─── Colours ──────────────────────────────────────────────────────────────────
@@ -45,8 +46,41 @@ INPUT_BG = "#2a3f55"
 def sha256(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
+if getattr(sys, 'frozen', False):
+    _INSTALLER_DIR = os.path.dirname(sys.executable)
+else:
+    _INSTALLER_DIR = os.path.dirname(os.path.abspath(__file__))
+
+_SSL_CERT_PATH = os.path.join(_INSTALLER_DIR, "ssl_cert.pem")
+
+class _SelfSignedAdapter(HTTPAdapter):
+    """Trust a specific self-signed cert; skip hostname check (internal network)."""
+    def __init__(self, cert_path, **kw):
+        self._cert_path = cert_path
+        super().__init__(**kw)
+    def _make_ctx(self):
+        if os.path.exists(self._cert_path):
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_REQUIRED
+            ctx.load_verify_locations(self._cert_path)
+        else:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+        return ctx
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs['ssl_context'] = self._make_ctx()
+        return super().init_poolmanager(*args, **kwargs)
+    def proxy_manager_for(self, proxy, **proxy_kwargs):
+        proxy_kwargs['ssl_context'] = self._make_ctx()
+        return super().proxy_manager_for(proxy, **proxy_kwargs)
+
 def api(method, url, **kw):
     kw.setdefault("timeout", 7)
+    if url.startswith("https"):
+        s = requests.Session()
+        s.mount("https://", _SelfSignedAdapter(_SSL_CERT_PATH))
+        return getattr(s, method)(url, **kw)
     return getattr(requests, method)(url, **kw)
 
 def _bundled_path(name):
@@ -115,7 +149,7 @@ class InstallerApp:
 
         cards = [
             ("server",      "🖥  Server",
-             "Run on asset-server only.\nHosts the database and REST API on port 8080."),
+             "Run on asset-server only.\nHosts the database and REST API on port 8081."),
             ("storekeeper", "📋  Storekeeper App",
              "Install on Storekeeper User's computer.\nUsed to log asset transactions."),
             ("notifier",    "🔔  Notifier",
@@ -179,7 +213,7 @@ class InstallerApp:
                   activebackground=ACCENT2).pack(fill="x", padx=24, pady=(8, 4))
 
         tk.Label(body,
-                 text="Asset Manager  \u2014  Internal IT asset tracking system.",
+                 text="Asset Manager  \u2014  For SD department internal use only.",
                  bg=BG, fg="#3d5470",
                  font=("Segoe UI", 8)).pack(pady=(4, 12))
 
@@ -206,7 +240,7 @@ class InstallerApp:
 
         if key == "server":
             tk.Label(self.dynamic,
-                     text="ℹ  Runs on asset-server only. Uses port 8080.",
+                     text="ℹ  Runs on asset-server only. Uses port 8081.",
                      bg=BG, fg=SUBTEXT, font=("Segoe UI", 9)).pack(anchor="w")
             tk.Label(self.dynamic, text="Set Admin Password:",
                      bg=BG, fg=SUBTEXT, font=("Segoe UI", 9)).pack(anchor="w", pady=(10, 2))
@@ -318,17 +352,20 @@ class InstallerApp:
         self.err_lbl.config(text="Verifying admin password...", fg=SUBTEXT)
         self.root.update()
         try:
-            import requests as req
-            r = req.post(f"{server_url}/admin/verify",
-                         json={"password": pw}, timeout=7)
+            r = api("post", f"{server_url}/admin/verify",
+                    json={"password": pw})
             if not (r.ok and r.json().get("valid")):
                 self.err_lbl.config(
                     text="\u274c  Wrong admin password. Installation blocked.", fg=DANGER)
                 return
-        except Exception:
+        except Exception as _ve:
+            _hint = ("\n(For HTTPS: copy ssl_cert.pem next to the installer.)"
+                     if server_url.startswith("https") and
+                        not os.path.exists(_SSL_CERT_PATH) else "")
             self.err_lbl.config(
                 text="\u26a0  Cannot reach server at the URL above.\n"
-                     "Make sure the server is running before installing the Notifier.",
+                     "Make sure the server is running before installing the Notifier."
+                     + _hint,
                 fg=DANGER)
             return
 
@@ -336,6 +373,8 @@ class InstallerApp:
             os.makedirs(dest_dir, exist_ok=True)
             dst = os.path.join(dest_dir, BUNDLED_EXES["notifier"])
             shutil.copy2(exe_src, dst)
+            if os.path.exists(_SSL_CERT_PATH):
+                shutil.copy2(_SSL_CERT_PATH, os.path.join(dest_dir, "ssl_cert.pem"))
             cfg = {
                 "server_url":     server_url,
                 "current_user":   member,
@@ -374,6 +413,8 @@ class InstallerApp:
             os.makedirs(dest_dir, exist_ok=True)
             dst = os.path.join(dest_dir, BUNDLED_EXES["server"])
             shutil.copy2(exe_src, dst)
+            if os.path.exists(_SSL_CERT_PATH):
+                shutil.copy2(_SSL_CERT_PATH, os.path.join(dest_dir, "ssl_cert.pem"))
             # Write admin_config.json with hashed password
             admin_cfg = {
                 "password_hash": hashlib.sha256(pw.encode()).hexdigest(),
@@ -386,9 +427,9 @@ class InstallerApp:
                 "Installation Complete ✔",
                 f"✅  Server installed successfully!\n\n"
                 f"Location: {dst}\n\n"
-                "IMPORTANT: Open port 8080 in Windows Firewall:\n"
+                "IMPORTANT: Open port 8081 in Windows Firewall:\n"
                 "netsh advfirewall firewall add rule name=\"Asset Manager\" "
-                "dir=in action=allow protocol=TCP localport=8080"
+                "dir=in action=allow protocol=TCP localport=8081"
             )
             self.root.destroy()
         except Exception as e:
@@ -401,6 +442,8 @@ class InstallerApp:
             os.makedirs(dest_dir, exist_ok=True)
             dst = os.path.join(dest_dir, BUNDLED_EXES["storekeeper"])
             shutil.copy2(exe_src, dst)
+            if os.path.exists(_SSL_CERT_PATH):
+                shutil.copy2(_SSL_CERT_PATH, os.path.join(dest_dir, "ssl_cert.pem"))
             cfg = {"server_url": server_url}
             with open(os.path.join(dest_dir, "config.json"), "w") as f:
                 json.dump(cfg, f, indent=2)

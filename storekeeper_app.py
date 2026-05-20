@@ -5,7 +5,8 @@ For: Storekeeper User
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-import requests, json, os, sys, threading
+import requests, json, os, sys, threading, ssl
+from requests.adapters import HTTPAdapter
 from datetime import datetime, date
 
 # ─── Config ───────────────────────────────────────────────────────────────────
@@ -18,7 +19,7 @@ else:
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
 DEFAULT_CFG = {
-    "server_url": "http://asset-server:8080"
+    "server_url": "https://asset-server:8081"
 }
 
 def load_cfg():
@@ -33,10 +34,10 @@ def save_cfg(cfg):
         json.dump(cfg, f, indent=2)
 
 TEAM_MEMBERS = [
-    "Admin User",
-    "Engineer3",
-    "Engineer1",
-    "Engineer2",
+    "Engineer 1",
+    "Engineer 2",
+    "Engineer 3",
+    "Engineer 4",
 ]
 
 ASSET_TYPES = ["Laptop", "Desktop", "Mobile", "Tablet", "Screen", "UPS", "Server",
@@ -58,8 +59,38 @@ INPUT_BG  = "#2a3f55"
 
 # ─── Shared API helper ────────────────────────────────────────────────────────
 
+_SSL_CERT_PATH = os.path.join(BASE_DIR, "ssl_cert.pem")
+
+class _SelfSignedAdapter(HTTPAdapter):
+    """Trust a specific self-signed cert; skip hostname check (internal network)."""
+    def __init__(self, cert_path, **kw):
+        self._cert_path = cert_path
+        super().__init__(**kw)
+    def _make_ctx(self):
+        if os.path.exists(self._cert_path):
+            # Custom self-signed cert: trust it, skip hostname check
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_REQUIRED
+            ctx.load_verify_locations(self._cert_path)
+        else:
+            # No cert file — use Windows system certificate store (no certifi dependency)
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+        return ctx
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs['ssl_context'] = self._make_ctx()
+        return super().init_poolmanager(*args, **kwargs)
+    def proxy_manager_for(self, proxy, **proxy_kwargs):
+        proxy_kwargs['ssl_context'] = self._make_ctx()
+        return super().proxy_manager_for(proxy, **proxy_kwargs)
+
 def api(method, url, **kw):
     kw.setdefault("timeout", 7)
+    if url.startswith("https"):
+        s = requests.Session()
+        s.mount("https://", _SelfSignedAdapter(_SSL_CERT_PATH))
+        return getattr(s, method)(url, **kw)
     return getattr(requests, method)(url, **kw)
 
 # ─── Date Range Export Dialog ─────────────────────────────────────────────────
@@ -442,7 +473,7 @@ class StorekeeperApp:
     def __init__(self, root):
         self.root       = root
         self.cfg        = load_cfg()
-        self.server_url = self.cfg.get("server_url", "http://asset-server:8080")
+        self.server_url = self.cfg.get("server_url", "https://asset-server:8081")
         self._all_rows  = []
         self._sort_col  = None
         self._sort_rev       = False
@@ -1439,9 +1470,9 @@ class StorekeeperApp:
                         fg="#90ee90")
                 else:
                     self.status_lbl.config(text="● Server Error", fg=WARNING)
-            except Exception:
+            except Exception as _e:
                 self.status_lbl.config(
-                    text="● Server Offline — check Admin Settings", fg=DANGER)
+                    text=f"● Offline: {type(_e).__name__}: {_e}", fg=DANGER)
         threading.Thread(target=_do, daemon=True).start()
         self._server_check_timer = self.root.after(20_000, self._check_server)
 

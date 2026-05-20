@@ -1,4 +1,5 @@
 @echo off
+cd /d "%~dp0"
 title Asset Manager — Build
 color 0A
 
@@ -11,7 +12,7 @@ python --version >nul 2>&1
 if errorlevel 1 ( echo [ERROR] Python not found. & pause & exit /b 1 )
 
 echo [1/7] Installing dependencies...
-pip install flask flask-cors requests pillow pystray pyinstaller openpyxl cryptography --quiet
+pip install flask flask-cors requests pillow pystray pyinstaller openpyxl "cryptography>=42.0.0" pyopenssl --quiet
 if errorlevel 1 ( echo [ERROR] pip failed. & pause & exit /b 1 )
 echo    Done.
 echo.
@@ -45,6 +46,7 @@ copy /Y "dist\StorekeeperApp.exe"     "output\"
 copy /Y "dist\NotifierApp.exe"        "output\"
 copy /Y "dist\AssetManager_Setup.exe" "output\"
 copy /Y "config.json"                 "output\"
+if exist "ssl_cert.pem" copy /Y "ssl_cert.pem" "output\"
 
 echo [7/7] Cleaning up PyInstaller temp files...
 rmdir /S /Q build 2>nul
@@ -64,15 +66,15 @@ echo     Notifier    -^> Install on each engineer's laptop
 echo                    (select engineer name -- no PIN needed)
 echo.
 echo   FIRST RUN defaults:
-echo     Server URL    : http://asset-server:8080
+echo     Server URL    : https://asset-server:8081
 echo     Admin password: admin  (change it on first login)
-echo     Port          : 8080  (open in firewall -- see below)
+echo     Port          : 8081  (open in firewall -- see below)
 echo.
 echo   NOTE: asset_lookup.xlsx is embedded inside AssetServer.exe.
 echo         It is extracted automatically on first run.
 echo         To update the lookup sheet use Admin Upload Lookup File.
 echo.
 echo   ONE-TIME firewall rule on asset-server:
-echo   netsh advfirewall firewall add rule name="Asset Manager" dir=in action=allow protocol=TCP localport=8080
+echo   netsh advfirewall firewall add rule name="Asset Manager" dir=in action=allow protocol=TCP localport=8081
 echo.
 pause
