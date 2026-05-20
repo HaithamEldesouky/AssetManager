@@ -6,7 +6,8 @@ Settings protected by admin password (verified against server).
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-import threading, time, requests, json, os, sys, winreg
+import threading, time, requests, json, os, sys, ssl
+from requests.adapters import HTTPAdapter
 from datetime import datetime
 
 try:
@@ -26,15 +27,15 @@ else:
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
 TEAM_MEMBERS = [
-    "Admin User",
-    "Engineer3",
-    "Engineer1",
-    "Engineer2",
+    "Engineer 1",
+    "Engineer 2",
+    "Engineer 3",
+    "Engineer 4",
 ]
 
 DEFAULT_CFG = {
-    "server_url":    "http://asset-server:8080",
-    "current_user":  "Admin User",
+    "server_url":    "https://asset-server:8081",
+    "current_user":  "Engineer 1",
     "poll_interval": 30,
 }
 
@@ -51,8 +52,36 @@ def save_config(cfg):
 
 # ─── Shared API helper ────────────────────────────────────────────────────────
 
+_SSL_CERT_PATH = os.path.join(BASE_DIR, "ssl_cert.pem")
+
+class _SelfSignedAdapter(HTTPAdapter):
+    """Trust a specific self-signed cert; skip hostname check (internal network)."""
+    def __init__(self, cert_path, **kw):
+        self._cert_path = cert_path
+        super().__init__(**kw)
+    def _make_ctx(self):
+        if os.path.exists(self._cert_path):
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_REQUIRED
+            ctx.load_verify_locations(self._cert_path)
+        else:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+        return ctx
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs['ssl_context'] = self._make_ctx()
+        return super().init_poolmanager(*args, **kwargs)
+    def proxy_manager_for(self, proxy, **proxy_kwargs):
+        proxy_kwargs['ssl_context'] = self._make_ctx()
+        return super().proxy_manager_for(proxy, **proxy_kwargs)
+
 def api(method, url, **kw):
     kw.setdefault("timeout", 7)
+    if url.startswith("https"):
+        s = requests.Session()
+        s.mount("https://", _SelfSignedAdapter(_SSL_CERT_PATH))
+        return getattr(s, method)(url, **kw)
     return getattr(requests, method)(url, **kw)
 
 # ─── Colours ──────────────────────────────────────────────────────────────────
@@ -451,7 +480,7 @@ class SettingsWindow:
     def __init__(self, root, cfg, server_url, on_save):
         win = tk.Toplevel(root)
         win.title("Notifier Settings")
-        win.geometry("430x290")
+        win.geometry("430x380")
         win.configure(bg=BG)
         win.resizable(False, False)
         win.grab_set()
@@ -478,7 +507,7 @@ class SettingsWindow:
 
         lbl("Assigned User  (this device belongs to)")
         member_cb = ttk.Combobox(frm, values=TEAM_MEMBERS, font=("Segoe UI", 10))
-        member_cb.set(cfg.get("current_user", "Admin User"))
+        member_cb.set(cfg.get("current_user", "Engineer 1"))
         member_cb.pack(fill="x", ipady=4)
 
         lbl("Poll Interval (seconds)")
@@ -520,19 +549,7 @@ class NotifierApp:
         self.root.withdraw()
         self.root.title("Asset Notifier")
 
-        self._register_startup()
         threading.Thread(target=self._poll_loop, daemon=True).start()
-
-    def _register_startup(self):
-        if not getattr(sys, 'frozen', False):
-            return
-        try:
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                                 r"Software\Microsoft\Windows\CurrentVersion\Run",
-                                 0, winreg.KEY_SET_VALUE)
-            winreg.SetValueEx(key, "AssetNotifier", 0, winreg.REG_SZ, sys.executable)
-            winreg.CloseKey(key)
-        except: pass
 
     def _poll_loop(self):
         self._poll_once()
@@ -661,7 +678,7 @@ class NotifierApp:
         lbl("Server URL")
         url_e = tk.Entry(frm, bg=INPUT_BG, fg=TEXT, relief="flat",
                          font=("Segoe UI", 10), insertbackground=TEXT)
-        url_e.insert(0, "http://asset-server:8080")
+        url_e.insert(0, "https://asset-server:8081")
         url_e.pack(fill="x", ipady=8)
 
         lbl("Assign this PC to")
