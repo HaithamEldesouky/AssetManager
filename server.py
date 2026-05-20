@@ -1,15 +1,33 @@
 """
 Asset Manager — Server
-- HTTP (internal domain network)
+- HTTP / HTTPS (internal domain network)
 - SQLite database
 - Admin password protected settings
 - Asset lookup from Excel file (asset_lookup.xlsx)
+- Minimises to system tray
 """
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import sqlite3, json, os, sys, socket, threading, time, hashlib, secrets, base64, io
 from datetime import datetime
+
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+    HAS_TRAY = True
+except ImportError:
+    HAS_TRAY = False
+
+def _make_server_tray_icon():
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    d   = ImageDraw.Draw(img)
+    d.rectangle([8, 24, 56, 56], fill=(0, 120, 212))
+    d.rectangle([20, 12, 44, 28], fill=(0, 120, 212))
+    d.line([(32, 12), (32, 56)], fill=(255, 255, 255, 180), width=2)
+    d.line([(8, 36), (56, 36)],  fill=(255, 255, 255, 180), width=2)
+    d.ellipse([42, 44, 58, 60], fill=(76, 175, 80))  # green dot = running
+    return img
 
 app = Flask(__name__)
 CORS(app)
@@ -23,9 +41,11 @@ DB_PATH         = os.path.join(BASE_DIR, "assets.db")
 ADMIN_CFG_PATH  = os.path.join(BASE_DIR, "admin_config.json")
 SERVER_CFG_PATH = os.path.join(BASE_DIR, "server_config.json")
 LOOKUP_PATH     = os.path.join(BASE_DIR, "asset_lookup.xlsx")
+SSL_CERT_PATH   = os.path.join(BASE_DIR, "ssl_cert.pem")
+SSL_KEY_PATH    = os.path.join(BASE_DIR, "ssl_key.pem")
 
 def _load_server_cfg():
-    default = {"host": "0.0.0.0", "port": 8080}
+    default = {"host": "0.0.0.0", "port": 8081}
     if os.path.exists(SERVER_CFG_PATH):
         try:
             with open(SERVER_CFG_PATH) as f:
@@ -143,7 +163,7 @@ DEFAULT_LOOKUP_B64 = (
     "o8lCq7jBTm4wyyLW/TtlLbqB0WShVdxgJzeYx+ih9++UtegGRpOEdlTc4BR/3GCRN/T+nbIW3cBo"
     "kiMoR8UNTvGnri2yUnT/TlmLbmA0WWgVNzjIDRbZD71/f2Zt+IpLRUaU3dGKHRxkB4sMc+/fn2kb"
     "vqIfGFEWW8UPDvKDZY8vwv075y0aghFl97RiCAcZwirzvft3zlt0BCNKNoOOiiOc4s9bqmdz7985"
-    "b9ESjCiLrWIJB1mCnoC9f+e8RU8woiy2iicc5Engineer3HIG9f+e8RVMwoiy2iikcZAqrnIG9f+e8RVcw"
+    "b9ESjCiLrWIJB1mCnoC9f+e8RU8woiy2iicc5AmrHIG9f+e8RVMwoiy2iikcZAqrnIG9f+e8RVcw"
     "oiQ21J8ShnbtF18A7bTKMdjrcryhPHwpiabbzml8FW9AxXoOelfZF2oCTl+0B6dK46sYxPBFDrGK"
     "rzYBPXoCITtVUuuwQ1y6v+QS6xTnztflfvtB+YvUDkjD6zJPVRpfxSiGL3KKVfZimoDzJ3TafZmn"
     "Ko2vYhbDF7uFjNGbgPMX7cKpEp8dviqGcam/HUO2PpqA8xctw6nS+CqmMXyxa8j+RxNw/gRWuy/z"
@@ -2055,6 +2075,13 @@ def set_server_config():
         json.dump({"host": new_host, "port": new_port}, f, indent=2)
     return jsonify({"status": "ok", "note": "Restart the server to apply changes."})
 
+@app.route('/cert')
+def serve_cert():
+    if os.path.exists(SSL_CERT_PATH):
+        return send_file(SSL_CERT_PATH, mimetype='application/x-pem-file',
+                         download_name='ssl_cert.pem', as_attachment=False)
+    return jsonify({"error": "No certificate installed on this server"}), 404
+
 # ─── Server GUI ───────────────────────────────────────────────────────────────
 
 def _load_lookup_raw():
@@ -2123,11 +2150,57 @@ def run_gui():
 
     root = tk.Tk()
     root.title("Asset Manager — Server")
-    root.geometry("530x630")
+    root.geometry("530x680")
     root.configure(bg="#1e2a3a")
     root.resizable(False, False)
-    root.protocol("WM_DELETE_WINDOW",
-        lambda: messagebox.askyesno("Quit", "Stop the server?") and os._exit(0))
+
+    _tray_icon = [None]
+    _minimised_to_tray = [False]
+
+    def _show_window():
+        root.after(0, lambda: (root.deiconify(), root.lift(), root.focus_force()))
+        _minimised_to_tray[0] = False
+
+    def _hide_window():
+        root.after(0, root.withdraw)
+        _minimised_to_tray[0] = True
+
+    def _quit_server(*_):
+        if messagebox.askyesno("Quit", "Stop the Asset Manager server?"):
+            if _tray_icon[0]:
+                threading.Thread(target=_tray_icon[0].stop, daemon=True).start()
+            os._exit(0)
+
+    def _on_close():
+        if HAS_TRAY:
+            _hide_window()
+            if not _minimised_to_tray[0]:
+                # First time — show balloon hint (tray icon title acts as tooltip)
+                pass
+        else:
+            _quit_server()
+
+    root.protocol("WM_DELETE_WINDOW", _on_close)
+
+    if HAS_TRAY:
+        def _build_server_tray():
+            def _toggle(*_):
+                if _minimised_to_tray[0]:
+                    _show_window()
+                else:
+                    _hide_window()
+            menu = pystray.Menu(
+                pystray.MenuItem("📦  Asset Manager  —  Server", None, enabled=False),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("🖥  Show / Hide",  _toggle, default=True),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("❌  Exit Server",  _quit_server),
+            )
+            icon = pystray.Icon("AssetServer", _make_server_tray_icon(),
+                                "Asset Manager — Server  ●  RUNNING", menu)
+            _tray_icon[0] = icon
+            icon.run()
+        threading.Thread(target=_build_server_tray, daemon=True).start()
 
     hdr = tk.Frame(root, bg="#0078d4", height=55)
     hdr.pack(fill="x")
@@ -2143,7 +2216,10 @@ def run_gui():
     try:    local_ip = socket.gethostbyname(hostname)
     except: local_ip = "127.0.0.1"
 
-    server_url = f"http://asset-server:{PORT}"
+    _ssl_active = (_SERVER_CFG.get('ssl_enabled') and
+                   os.path.exists(SSL_CERT_PATH) and os.path.exists(SSL_KEY_PATH))
+    _proto      = "https" if _ssl_active else "http"
+    server_url  = f"{_proto}://asset-server:{PORT}"
 
     def info_row(label, value, color="#ffffff"):
         f = tk.Frame(card, bg="#243447")
@@ -2153,12 +2229,15 @@ def run_gui():
         tk.Label(f, text=value, bg="#243447", fg=color,
                  font=("Segoe UI", 10, "bold"), anchor="w").pack(side="left")
 
-    info_row("Status:",      "● RUNNING",            "#4caf50")
-    info_row("Encryption:",  "HTTP  (internal network)", "#4caf50")
+    _enc_text  = "HTTPS  (SSL encrypted)" if _ssl_active else "HTTP  (internal network)"
+    _enc_color = "#4caf50"
+
+    info_row("Status:",      "● RUNNING",  "#4caf50")
+    info_row("Encryption:",  _enc_text,    _enc_color)
     info_row("Host:",        hostname)
-    info_row("IP Address:",  local_ip,   "#0078d4")
+    info_row("IP Address:",  local_ip,     "#0078d4")
     info_row("Port:",        str(PORT))
-    info_row("Server URL:",  server_url, "#f0a500")
+    info_row("Server URL:",  server_url,   "#f0a500")
     info_row("Database:",    DB_PATH)
 
     def copy_url():
@@ -2316,7 +2395,346 @@ def run_gui():
               font=("Segoe UI", 9, "bold"),
               relief="flat", cursor="hand2", pady=8,
               command=change_host_port,
-              activebackground="#1a4060").pack(fill="x", padx=18, pady=(0, 10))
+              activebackground="#1a4060").pack(fill="x", padx=18, pady=(0, 4))
+
+    # ─── Clear All Records ────────────────────────────────────────────────
+    def clear_all_records():
+        import tkinter.messagebox as mb
+        dlg = tk.Toplevel(root)
+        dlg.title("Clear All Records")
+        dlg.geometry("400x310")
+        dlg.configure(bg="#1e2a3a")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+        dlg.transient(root)
+
+        hdr = tk.Frame(dlg, bg="#c0392b", height=44)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text="🗑  Clear All Records",
+                 bg="#c0392b", fg="white",
+                 font=("Segoe UI", 11, "bold")).pack(side="left", padx=14, pady=12)
+
+        frm = tk.Frame(dlg, bg="#243447", padx=20, pady=14)
+        frm.pack(fill="x", padx=18, pady=14)
+
+        tk.Label(frm, text="⚠  This will permanently delete ALL transaction records.",
+                 bg="#243447", fg="#f0a500", font=("Segoe UI", 9),
+                 wraplength=320).pack(anchor="w", pady=(0, 10))
+
+        tk.Label(frm, text="Admin Password", bg="#243447", fg="#8a9bb0",
+                 font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 2))
+        pw_e = tk.Entry(frm, show="●", bg="#2a3f55", fg="#ffffff",
+                        relief="flat", font=("Segoe UI", 10),
+                        insertbackground="#ffffff")
+        pw_e.pack(fill="x", ipady=7)
+
+        err_lbl = tk.Label(dlg, text="", bg="#1e2a3a", fg="#f44336",
+                           font=("Segoe UI", 9))
+        err_lbl.pack(pady=(2, 0))
+
+        def do_clear():
+            pw = pw_e.get()
+            if not pw:
+                err_lbl.config(text="✗  Password is required.")
+                return
+            if sha256(pw) != ADMIN_CFG['password_hash']:
+                err_lbl.config(text="✗  Incorrect password.")
+                return
+            if not mb.askyesno("Confirm Delete",
+                               "Are you sure?\n\nThis will delete ALL transaction records permanently.\nThis cannot be undone.",
+                               icon="warning"):
+                return
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute("DELETE FROM transactions")
+                conn.commit()
+                conn.close()
+                dlg.destroy()
+                mb.showinfo("Done", "✓  All records have been deleted.")
+            except Exception as ex:
+                err_lbl.config(text=f"✗  Error: {ex}")
+
+        tk.Button(dlg, text="🗑  Delete All Records",
+                  bg="#c0392b", fg="white", font=("Segoe UI", 10, "bold"),
+                  relief="flat", cursor="hand2", pady=9,
+                  command=do_clear,
+                  activebackground="#922b21").pack(fill="x", padx=18, pady=(4, 12))
+        pw_e.focus_set()
+
+    tk.Button(root, text="🗑  Clear All Records",
+              bg="#922b21", fg="white",
+              font=("Segoe UI", 9, "bold"),
+              relief="flat", cursor="hand2", pady=8,
+              command=clear_all_records,
+              activebackground="#7b241c").pack(fill="x", padx=18, pady=(0, 4))
+
+    # ─── SSL Certificate ──────────────────────────────────────────────────────
+    def _cert_to_pem(cert_path, key_path=None, pfx_password=None):
+        """Convert cert (and key) to PEM bytes. Returns (cert_pem, key_pem)."""
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.serialization import pkcs12
+        from cryptography.hazmat.primitives.serialization import (
+            load_pem_private_key, load_der_private_key)
+
+        ext = os.path.splitext(cert_path)[1].lower()
+
+        if ext in ('.pfx', '.p12'):
+            with open(cert_path, 'rb') as f:
+                data = f.read()
+            # Try provided password, then empty-string fallback (Windows exports
+            # sometimes require b"" rather than None even when no password is set)
+            pwd = pfx_password.encode('utf-8') if pfx_password else None
+            last_err = None
+            result = None
+            for attempt_pwd in ([pwd] if pwd is not None else [None, b""]):
+                try:
+                    result = pkcs12.load_key_and_certificates(data, attempt_pwd)
+                    break
+                except Exception as e:
+                    last_err = e
+            if result is None:
+                # Last-resort fallback via pyOpenSSL (handles older/legacy PFX formats)
+                try:
+                    from OpenSSL import crypto as _ossl
+                    _pfx = _ossl.load_pkcs12(data, pwd if pwd is not None else b"")
+                    cert_pem = _ossl.dump_certificate(_ossl.FILETYPE_PEM, _pfx.get_certificate())
+                    key_pem  = _ossl.dump_privatekey(_ossl.FILETYPE_PEM, _pfx.get_privatekey())
+                    return cert_pem, key_pem
+                except Exception as oe:
+                    pass
+                raise ValueError(
+                    "Cannot open PFX file.\n"
+                    "• If it has a password, enter it in the PFX Password field.\n"
+                    f"• Technical detail: {last_err}"
+                )
+            priv_key, cert_obj, _ = result
+            if cert_obj is None:
+                raise ValueError("No certificate found in PFX file.")
+            if priv_key is None:
+                raise ValueError("No private key found in PFX file — "
+                                 "make sure the PFX includes the private key.")
+            cert_pem = cert_obj.public_bytes(serialization.Encoding.PEM)
+            key_pem  = priv_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption()
+            )
+            return cert_pem, key_pem
+
+        # .crt / .cer / .pem — certificate only; key file required
+        with open(cert_path, 'rb') as f:
+            cert_data = f.read()
+        try:
+            x509.load_pem_x509_certificate(cert_data)
+            cert_pem = cert_data
+        except Exception:
+            try:
+                cert_obj = x509.load_der_x509_certificate(cert_data)
+                cert_pem = cert_obj.public_bytes(serialization.Encoding.PEM)
+            except Exception:
+                raise ValueError("Cannot parse certificate — unsupported format.")
+
+        if not key_path or not os.path.exists(key_path):
+            raise ValueError("Private key file is required for .crt / .cer / .pem certificates.")
+        with open(key_path, 'rb') as f:
+            key_data = f.read()
+        try:
+            load_pem_private_key(key_data, password=None)
+            key_pem = key_data
+        except Exception:
+            try:
+                key_obj = load_der_private_key(key_data, password=None)
+                key_pem = key_obj.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.TraditionalOpenSSL,
+                    encryption_algorithm=serialization.NoEncryption()
+                )
+            except Exception:
+                raise ValueError("Cannot parse key file — unsupported format.")
+        return cert_pem, key_pem
+
+    def upload_ssl_cert():
+        import tkinter.messagebox as mb
+        import tkinter.filedialog as fd
+
+        dlg = tk.Toplevel(root)
+        dlg.title("SSL Certificate")
+        dlg.geometry("440x440")
+        dlg.configure(bg="#1e2a3a")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+        dlg.transient(root)
+
+        hdr = tk.Frame(dlg, bg="#1a7a4a", height=44)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text="🔒  SSL Certificate",
+                 bg="#1a7a4a", fg="white",
+                 font=("Segoe UI", 11, "bold")).pack(side="left", padx=14, pady=12)
+
+        _ssl_on  = _SERVER_CFG.get('ssl_enabled', False)
+        _cert_ok = os.path.exists(SSL_CERT_PATH)
+        _status  = "Active (HTTPS)" if (_ssl_on and _cert_ok) else "Inactive (HTTP)"
+        _s_color = "#4caf50" if (_ssl_on and _cert_ok) else "#f44336"
+
+        sf = tk.Frame(dlg, bg="#243447", padx=16, pady=10)
+        sf.pack(fill="x", padx=18, pady=(10, 0))
+        tk.Label(sf, text=f"Status:  {_status}", bg="#243447", fg=_s_color,
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        if _cert_ok:
+            tk.Label(sf, text=SSL_CERT_PATH, bg="#243447", fg="#8a9bb0",
+                     font=("Segoe UI", 8), wraplength=380).pack(anchor="w", pady=(2, 0))
+
+        frm = tk.Frame(dlg, bg="#1e2a3a", padx=18)
+        frm.pack(fill="x", pady=(6, 0))
+
+        CERT_TYPES = [
+            ("Certificate files", "*.pfx *.p12 *.crt *.cer *.pem"),
+            ("PFX / PKCS#12",    "*.pfx *.p12"),
+            ("CRT / CER",        "*.crt *.cer"),
+            ("PEM",              "*.pem"),
+            ("All files",        "*.*"),
+        ]
+        KEY_TYPES = [
+            ("Key files", "*.pem *.key"),
+            ("All files", "*.*"),
+        ]
+
+        # ── Cert row ──
+        tk.Label(frm, text="Certificate file  (.pfx  .crt  .cer  .pem)",
+                 bg="#1e2a3a", fg="#8a9bb0", font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 2))
+        cert_row = tk.Frame(frm, bg="#1e2a3a")
+        cert_row.pack(fill="x")
+        cert_var = tk.StringVar()
+        cert_e = tk.Entry(cert_row, textvariable=cert_var, bg="#2a3f55", fg="#ffffff",
+                          relief="flat", font=("Segoe UI", 9), insertbackground="#ffffff")
+        cert_e.pack(side="left", fill="x", expand=True, ipady=6)
+
+        # ── Key row (hidden for PFX) ──
+        key_lbl_var = tk.StringVar(value="Private key file  (.pem  .key)")
+        key_lbl = tk.Label(frm, textvariable=key_lbl_var,
+                           bg="#1e2a3a", fg="#8a9bb0", font=("Segoe UI", 9))
+        key_lbl.pack(anchor="w", pady=(8, 2))
+        key_row = tk.Frame(frm, bg="#1e2a3a")
+        key_row.pack(fill="x")
+        key_var = tk.StringVar(value=SSL_KEY_PATH if os.path.exists(SSL_KEY_PATH) else "")
+        key_e = tk.Entry(key_row, textvariable=key_var, bg="#2a3f55", fg="#ffffff",
+                         relief="flat", font=("Segoe UI", 9), insertbackground="#ffffff")
+        key_e.pack(side="left", fill="x", expand=True, ipady=6)
+        key_btn = tk.Button(key_row, text="Browse", bg="#2a5e8a", fg="white",
+                            relief="flat", cursor="hand2", font=("Segoe UI", 9),
+                            command=lambda: key_var.set(
+                                fd.askopenfilename(title="Select Key File",
+                                                   filetypes=KEY_TYPES) or key_var.get()))
+        key_btn.pack(side="left", padx=(4, 0), ipadx=8, ipady=6)
+
+        # ── PFX password row (shown only for PFX) ──
+        pfx_lbl = tk.Label(frm, text="PFX Password  (leave blank if none)",
+                           bg="#1e2a3a", fg="#8a9bb0", font=("Segoe UI", 9))
+        pfx_pwd_var = tk.StringVar()
+        pfx_e = tk.Entry(frm, textvariable=pfx_pwd_var, show="●",
+                         bg="#2a3f55", fg="#ffffff", relief="flat",
+                         font=("Segoe UI", 9), insertbackground="#ffffff")
+
+        def _on_cert_change(*_):
+            path = cert_var.get().strip()
+            ext  = os.path.splitext(path)[1].lower()
+            is_pfx = ext in ('.pfx', '.p12')
+            # Toggle key row
+            state = tk.DISABLED if is_pfx else tk.NORMAL
+            key_e.config(state=state, bg="#1e2a3a" if is_pfx else "#2a3f55")
+            key_btn.config(state=state)
+            key_lbl_var.set("Private key file  (not needed for PFX)"
+                            if is_pfx else "Private key file  (.pem  .key)")
+            # Toggle PFX password row
+            if is_pfx:
+                pfx_lbl.pack(anchor="w", pady=(8, 2))
+                pfx_e.pack(fill="x", ipady=6)
+            else:
+                pfx_lbl.pack_forget()
+                pfx_e.pack_forget()
+
+        cert_var.trace_add("write", _on_cert_change)
+        tk.Button(cert_row, text="Browse", bg="#2a5e8a", fg="white",
+                  relief="flat", cursor="hand2", font=("Segoe UI", 9),
+                  command=lambda: cert_var.set(
+                      fd.askopenfilename(title="Select Certificate File",
+                                         filetypes=CERT_TYPES) or cert_var.get())
+                  ).pack(side="left", padx=(4, 0), ipadx=8, ipady=6)
+
+        err_lbl = tk.Label(dlg, text="", bg="#1e2a3a", fg="#f44336", font=("Segoe UI", 9))
+        err_lbl.pack(pady=(6, 0))
+
+        def do_install():
+            c   = cert_var.get().strip()
+            k   = key_var.get().strip()
+            pwd = pfx_pwd_var.get()
+            if not c:
+                err_lbl.config(text="✗  Certificate file is required.")
+                return
+            if not os.path.exists(c):
+                err_lbl.config(text="✗  Certificate file not found.")
+                return
+            try:
+                cert_pem, key_pem = _cert_to_pem(c, k or None, pwd or None)
+                with open(SSL_CERT_PATH, 'wb') as f:
+                    f.write(cert_pem)
+                with open(SSL_KEY_PATH, 'wb') as f:
+                    f.write(key_pem)
+                cfg = _load_server_cfg()
+                cfg['ssl_enabled'] = True
+                with open(SERVER_CFG_PATH, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+                dlg.destroy()
+                mb.showinfo("SSL Installed",
+                            "✓  Certificate installed successfully.\n\n"
+                            "Restart the server to enable HTTPS.\n\n"
+                            "Clients connect to:\n"
+                            f"https://{socket.gethostname()}:{PORT}")
+            except Exception as ex:
+                err_lbl.config(text=f"✗  {ex}")
+
+        def do_remove():
+            if not mb.askyesno("Remove SSL",
+                               "Remove the SSL certificate and revert to HTTP?",
+                               icon="warning"):
+                return
+            try:
+                for p in [SSL_CERT_PATH, SSL_KEY_PATH]:
+                    if os.path.exists(p):
+                        os.remove(p)
+                cfg = _load_server_cfg()
+                cfg['ssl_enabled'] = False
+                with open(SERVER_CFG_PATH, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+                dlg.destroy()
+                mb.showinfo("SSL Removed",
+                            "✓  Certificate removed.\nRestart the server to revert to HTTP.")
+            except Exception as ex:
+                err_lbl.config(text=f"✗  {ex}")
+
+        btn_frm = tk.Frame(dlg, bg="#1e2a3a")
+        btn_frm.pack(fill="x", padx=18, pady=(6, 12))
+        tk.Button(btn_frm, text="🔒  Install Certificate  (restart to apply)",
+                  bg="#1a7a4a", fg="white", font=("Segoe UI", 10, "bold"),
+                  relief="flat", cursor="hand2", pady=9,
+                  command=do_install,
+                  activebackground="#145f38").pack(fill="x", pady=(0, 4))
+        if _cert_ok:
+            tk.Button(btn_frm, text="Remove SSL",
+                      bg="#4a4a5a", fg="white", font=("Segoe UI", 9),
+                      relief="flat", cursor="hand2", pady=7,
+                      command=do_remove,
+                      activebackground="#333344").pack(fill="x")
+
+    tk.Button(root, text="🔒  SSL Certificate",
+              bg="#1a7a4a", fg="white",
+              font=("Segoe UI", 9, "bold"),
+              relief="flat", cursor="hand2", pady=8,
+              command=upload_ssl_cert,
+              activebackground="#145f38").pack(fill="x", padx=18, pady=(0, 10))
 
     # Stats
     stats_card = tk.Frame(root, bg="#243447", padx=14, pady=12)
@@ -2344,8 +2762,24 @@ def run_gui():
 
     def refresh_stats():
         try:
-            import requests as req
-            r = req.get(f"http://127.0.0.1:{PORT}/stats", timeout=2)
+            import requests as req, ssl as _ssl
+            from requests.adapters import HTTPAdapter as _HA
+            _ssl_on = _SERVER_CFG.get('ssl_enabled') and os.path.exists(SSL_CERT_PATH)
+            _proto  = "https" if _ssl_on else "http"
+            if _ssl_on:
+                class _A(_HA):
+                    def init_poolmanager(self, *a, **kw):
+                        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_CLIENT)
+                        ctx.check_hostname = False
+                        ctx.verify_mode = _ssl.CERT_REQUIRED
+                        if os.path.exists(SSL_CERT_PATH):
+                            ctx.load_verify_locations(SSL_CERT_PATH)
+                        kw['ssl_context'] = ctx
+                        return super().init_poolmanager(*a, **kw)
+                _s = req.Session(); _s.mount("https://", _A())
+                r = _s.get(f"https://127.0.0.1:{PORT}/stats", timeout=2)
+            else:
+                r = req.get(f"http://127.0.0.1:{PORT}/stats", timeout=2)
             if r.ok:
                 for k, lbl in stat_labels.items():
                     lbl.config(text=str(r.json().get(k, "—")))
@@ -2353,6 +2787,15 @@ def run_gui():
         root.after(5000, refresh_stats)
 
     refresh_stats()
+
+    # Update tray tooltip periodically to reflect SSL state
+    def _update_tray_title():
+        if _tray_icon[0]:
+            _ssl_now = _SERVER_CFG.get('ssl_enabled') and os.path.exists(SSL_CERT_PATH)
+            _proto_now = "HTTPS" if _ssl_now else "HTTP"
+            _tray_icon[0].title = f"Asset Manager — Server  ●  RUNNING  ({_proto_now})"
+        root.after(10000, _update_tray_title)
+    _update_tray_title()
 
     root.mainloop()
 
@@ -2364,11 +2807,16 @@ if __name__ == '__main__':
     _ensure_sample_lookup()
 
     def run_flask():
+        ssl_ctx = None
+        if (_SERVER_CFG.get('ssl_enabled') and
+                os.path.exists(SSL_CERT_PATH) and os.path.exists(SSL_KEY_PATH)):
+            ssl_ctx = (SSL_CERT_PATH, SSL_KEY_PATH)
         app.run(
             host=HOST,
             port=PORT,
             debug=False,
-            use_reloader=False
+            use_reloader=False,
+            ssl_context=ssl_ctx
         )
 
     threading.Thread(target=run_flask, daemon=True).start()
