@@ -9,8 +9,15 @@ Asset Manager — Server
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-import sqlite3, json, os, sys, socket, threading, time, hashlib, secrets, base64, io
+import sqlite3, json, os, sys, socket, threading, time, hashlib, secrets, base64, io, ctypes
 from datetime import datetime
+
+# pywin32 — optional; required only for Windows Service mode
+try:
+    import win32serviceutil, win32service, win32event, servicemanager
+    HAS_WIN32SVC = True
+except ImportError:
+    HAS_WIN32SVC = False
 
 try:
     import pystray
@@ -58,6 +65,36 @@ def _load_server_cfg():
 _SERVER_CFG = _load_server_cfg()
 HOST = _SERVER_CFG["host"]
 PORT = _SERVER_CFG["port"]
+
+
+def _port_in_use(port):
+    """Return True if something is already listening on 127.0.0.1:port."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            return s.connect_ex(("127.0.0.1", port)) == 0
+    except Exception:
+        return False
+
+
+def _acquire_single_instance_mutex():
+    """
+    Create a Global Named Mutex so only one interactive GUI process runs.
+    Returns True if this process is the first (mutex created fresh).
+    Returns False if another GUI instance already holds it.
+    Only meaningful on Windows; always returns True on other platforms.
+    """
+    if sys.platform != "win32":
+        return True
+    try:
+        handle = ctypes.windll.kernel32.CreateMutexW(None, True,
+                                                      "Global\\AssetManagerServer_GUI")
+        err = ctypes.windll.kernel32.GetLastError()
+        # ERROR_ALREADY_EXISTS == 183
+        return err != 183
+    except Exception:
+        return True  # can't check → allow
+
 
 ASSET_TYPES = ["Laptop", "Desktop", "Mobile", "Tablet", "Screen", "UPS", "Server",
                "Cisco Phone", "Printer", "Scanner", "Switch"]
@@ -1128,25 +1165,112 @@ def run_gui():
     root.mainloop()
 
 
+# ─── Flask runner (shared by interactive mode and Windows Service) ────────────
+
+def _run_flask():
+    """Start the Flask server (blocking). Chooses HTTP or HTTPS automatically."""
+    ssl_ctx = None
+    if (_SERVER_CFG.get('ssl_enabled') and
+            os.path.exists(SSL_CERT_PATH) and os.path.exists(SSL_KEY_PATH)):
+        ssl_ctx = (SSL_CERT_PATH, SSL_KEY_PATH)
+    app.run(
+        host=HOST,
+        port=PORT,
+        debug=False,
+        use_reloader=False,
+        ssl_context=ssl_ctx
+    )
+
+
+# ─── Windows Service definition ───────────────────────────────────────────────
+
+if HAS_WIN32SVC:
+    class AssetManagerService(win32serviceutil.ServiceFramework):
+        """
+        Windows Service wrapper for the Asset Manager Flask backend.
+        Install : AssetServer.exe install
+        Remove  : AssetServer.exe remove
+        Start   : net start AssetManagerServer   (or via Services MMC)
+        Stop    : net stop  AssetManagerServer
+        Debug   : AssetServer.exe debug          (runs in console, Ctrl-C to stop)
+        """
+        _svc_name_         = "AssetManagerServer"
+        _svc_display_name_ = "Asset Manager Server"
+        _svc_description_  = (
+            "Runs the Asset Manager REST API (Flask/SQLite) as a background service, "
+            "independent of any logged-on user session."
+        )
+
+        def __init__(self, args):
+            win32serviceutil.ServiceFramework.__init__(self, args)
+            self._stop_evt = win32event.CreateEvent(None, 0, 0, None)
+
+        def SvcStop(self):
+            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+            win32event.SetEvent(self._stop_evt)
+
+        def SvcDoRun(self):
+            servicemanager.LogMsg(
+                servicemanager.EVENTLOG_INFORMATION_TYPE,
+                servicemanager.PYS_SERVICE_STARTED,
+                (self._svc_name_, ""),
+            )
+            init_db()
+            _ensure_sample_lookup()
+            threading.Thread(target=_run_flask, daemon=True).start()
+            # Block until SvcStop sets the event
+            win32event.WaitForSingleObject(self._stop_evt, win32event.INFINITE)
+            servicemanager.LogMsg(
+                servicemanager.EVENTLOG_INFORMATION_TYPE,
+                servicemanager.PYS_SERVICE_STOPPED,
+                (self._svc_name_, ""),
+            )
+
+
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    init_db()
-    _ensure_sample_lookup()
+    # ── Service management commands (install / remove / start / stop / debug) ──
+    _svc_cmds = {"install", "remove", "start", "stop", "restart", "debug",
+                 "update", "--startup", "querycontrol"}
+    _first_arg = sys.argv[1].lower() if len(sys.argv) > 1 else ""
 
-    def run_flask():
-        ssl_ctx = None
-        if (_SERVER_CFG.get('ssl_enabled') and
-                os.path.exists(SSL_CERT_PATH) and os.path.exists(SSL_KEY_PATH)):
-            ssl_ctx = (SSL_CERT_PATH, SSL_KEY_PATH)
-        app.run(
-            host=HOST,
-            port=PORT,
-            debug=False,
-            use_reloader=False,
-            ssl_context=ssl_ctx
-        )
+    if _first_arg in _svc_cmds:
+        if HAS_WIN32SVC:
+            win32serviceutil.HandleCommandLine(AssetManagerService)
+        else:
+            print("pywin32 is not installed — Windows Service mode unavailable.")
+            sys.exit(1)
+    else:
+        # ── Interactive GUI mode ──────────────────────────────────────────────
+        # Hide the console window that appears when built without --windowed
+        if sys.platform == "win32" and getattr(sys, 'frozen', False):
+            try:
+                ctypes.windll.user32.ShowWindow(
+                    ctypes.windll.kernel32.GetConsoleWindow(), 0  # SW_HIDE
+                )
+            except Exception:
+                pass
 
-    threading.Thread(target=run_flask, daemon=True).start()
-    time.sleep(0.8)
-    run_gui()
+        if not _acquire_single_instance_mutex():
+            # Another GUI window is already open — bring it to the foreground
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                "Asset Manager Server is already running.\n\nCheck the system tray.",
+                "Already Running",
+                0x40,   # MB_ICONINFORMATION
+            )
+            sys.exit(0)
+
+        init_db()
+        _ensure_sample_lookup()
+
+        if _port_in_use(PORT):
+            # Service (or another process) is already listening — skip Flask start
+            # so the GUI acts as a monitor-only front-end
+            pass
+        else:
+            threading.Thread(target=_run_flask, daemon=True).start()
+            time.sleep(0.8)
+
+        run_gui()
