@@ -12,7 +12,7 @@ python --version >nul 2>&1
 if errorlevel 1 ( echo [ERROR] Python not found. & pause & exit /b 1 )
 
 echo [1/7] Installing dependencies...
-pip install flask flask-cors requests pillow pystray pyinstaller openpyxl "cryptography>=42.0.0" pyopenssl --quiet
+pip install flask flask-cors requests pillow pystray pyinstaller openpyxl "cryptography>=42.0.0" pyopenssl pywin32 --quiet
 if errorlevel 1 ( echo [ERROR] pip failed. & pause & exit /b 1 )
 echo    Done.
 echo.
@@ -21,7 +21,7 @@ if not exist "dist"   mkdir dist
 if not exist "output" mkdir output
 
 echo [2/7] Building AssetServer.exe...
-pyinstaller --noconfirm --onefile --windowed --name "AssetServer" server.py
+pyinstaller --noconfirm --onefile --name "AssetServer" server.py
 if errorlevel 1 ( echo [ERROR] Server build failed. & pause & exit /b 1 )
 
 echo [3/7] Building StorekeeperApp.exe...
