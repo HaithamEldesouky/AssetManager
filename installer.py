@@ -410,6 +410,7 @@ class InstallerApp:
             self.err_lbl.config(text="✗  Passwords do not match.", fg=DANGER)
             return
         try:
+            import subprocess
             os.makedirs(dest_dir, exist_ok=True)
             dst = os.path.join(dest_dir, BUNDLED_EXES["server"])
             shutil.copy2(exe_src, dst)
@@ -422,11 +423,37 @@ class InstallerApp:
             }
             with open(os.path.join(dest_dir, "admin_config.json"), "w") as f:
                 json.dump(admin_cfg, f, indent=2)
+
+            # Register and start the Windows Service
+            svc_note = ""
+            try:
+                subprocess.run([dst, "install"], check=True,
+                               capture_output=True, timeout=30)
+                subprocess.run(["net", "start", "AssetManagerServer"], check=True,
+                               capture_output=True, timeout=30)
+                svc_note = "\n\n✅  Windows Service registered and started automatically."
+            except subprocess.CalledProcessError as svc_err:
+                svc_note = (
+                    "\n\n⚠️  Service registration failed (run installer as Administrator).\n"
+                    f"    Error: {svc_err.stderr.decode(errors='replace').strip() or svc_err}\n\n"
+                    "    To register manually (as Administrator):\n"
+                    f'    "{dst}" install\n'
+                    '    net start AssetManagerServer'
+                )
+            except Exception as svc_err:
+                svc_note = (
+                    f"\n\n⚠️  Service registration failed: {svc_err}\n\n"
+                    "    To register manually (as Administrator):\n"
+                    f'    "{dst}" install\n'
+                    '    net start AssetManagerServer'
+                )
+
             _create_shortcut(dst, "Asset Manager Server")
             messagebox.showinfo(
                 "Installation Complete ✔",
                 f"✅  Server installed successfully!\n\n"
-                f"Location: {dst}\n\n"
+                f"Location: {dst}\n"
+                f"{svc_note}\n\n"
                 "IMPORTANT: Open port 8081 in Windows Firewall:\n"
                 "netsh advfirewall firewall add rule name=\"Asset Manager\" "
                 "dir=in action=allow protocol=TCP localport=8081"
