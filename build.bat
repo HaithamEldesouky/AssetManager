@@ -21,7 +21,7 @@ if not exist "dist"   mkdir dist
 if not exist "output" mkdir output
 
 echo [2/7] Building AssetServer.exe...
-pyinstaller --noconfirm --onefile --name "AssetServer" server.py
+pyinstaller --noconfirm --onefile --name "AssetServer" --hidden-import win32timezone server.py
 if errorlevel 1 ( echo [ERROR] Server build failed. & pause & exit /b 1 )
 
 echo [3/7] Building StorekeeperApp.exe...
