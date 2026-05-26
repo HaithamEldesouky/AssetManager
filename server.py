@@ -1210,6 +1210,9 @@ if HAS_WIN32SVC:
             win32event.SetEvent(self._stop_evt)
 
         def SvcDoRun(self):
+            # Tell the SCM the service is now running — must be called before
+            # any slow initialisation, otherwise net start times out (30 s default)
+            self.ReportServiceStatus(win32service.SERVICE_RUNNING)
             servicemanager.LogMsg(
                 servicemanager.EVENTLOG_INFORMATION_TYPE,
                 servicemanager.PYS_SERVICE_STARTED,
