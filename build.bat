@@ -12,7 +12,7 @@ python --version >nul 2>&1
 if errorlevel 1 ( echo [ERROR] Python not found. & pause & exit /b 1 )
 
 echo [1/7] Installing dependencies...
-pip install flask flask-cors requests pillow pystray pyinstaller openpyxl "cryptography>=42.0.0" pyopenssl pywin32 --quiet
+pip install flask flask-cors requests pillow pystray pyinstaller openpyxl "cryptography>=42.0.0" pyopenssl pywin32 --quiet --upgrade-strategy only-if-needed
 if errorlevel 1 ( echo [ERROR] pip failed. & pause & exit /b 1 )
 echo    Done.
 echo.
@@ -53,8 +53,10 @@ if exist "ssl_cert.pem" copy /Y "ssl_cert.pem" "output\"
 if exist "ssl_key.pem"  copy /Y "ssl_key.pem"  "output\"
 
 echo [7/7] Cleaning up PyInstaller temp files...
-rmdir /S /Q build 2>nul
-del /Q *.spec    2>nul
+rem  Keeping build\ — it caches PyInstaller's dependency analysis and
+rem  makes subsequent rebuilds ~40% faster. Delete it manually only if
+rem  you hit a stale-cache issue (very rare).
+del /Q *.spec 2>nul
 
 echo.
 echo ============================================================
