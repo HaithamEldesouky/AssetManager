@@ -1032,6 +1032,44 @@ def run_gui():
         err_lbl = tk.Label(dlg, text="", bg="#1e2a3a", fg="#f44336", font=("Segoe UI", 9))
         err_lbl.pack(pady=(6, 0))
 
+        def _restart_server(action_done):
+            """Restart Flask to apply the new SSL config.
+            - If Windows Service is running → stop + start the service.
+            - If plain GUI mode → restart this process (os.execv).
+            """
+            import subprocess as _sp
+
+            svc_running = False
+            if HAS_WIN32SVC:
+                try:
+                    r = _sp.run(["sc", "query", "AssetManagerServer"],
+                                capture_output=True, timeout=5)
+                    svc_running = "RUNNING" in r.stdout.decode(errors="replace")
+                except Exception:
+                    pass
+
+            if svc_running:
+                mb.showinfo("Done", f"{action_done}\n\n"
+                            "Restarting Windows Service to apply changes…\n"
+                            "(Stats will refresh in a few seconds.)")
+                def _do():
+                    try:
+                        _sp.run(["net", "stop", "AssetManagerServer"],
+                                capture_output=True, timeout=30)
+                        _sp.Popen(["net", "start", "AssetManagerServer"],
+                                  stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                    except Exception:
+                        pass
+                threading.Thread(target=_do, daemon=True).start()
+            else:
+                mb.showinfo("Done", f"{action_done}\n\n"
+                            "Restarting server now to apply changes…")
+                try:
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+                except Exception:
+                    mb.showinfo("Restart Required",
+                                "Please close and reopen AssetServer.exe to apply changes.")
+
         def do_install():
             c   = cert_var.get().strip()
             k   = key_var.get().strip()
@@ -1053,11 +1091,9 @@ def run_gui():
                 with open(SERVER_CFG_PATH, 'w') as f:
                     json.dump(cfg, f, indent=2)
                 dlg.destroy()
-                mb.showinfo("SSL Installed",
-                            "✓  Certificate installed successfully.\n\n"
-                            "Restart the server to enable HTTPS.\n\n"
-                            "Clients connect to:\n"
-                            f"https://{socket.gethostname()}:{PORT}")
+                _restart_server(
+                    f"✓  Certificate installed.\n\nClients connect to:\nhttps://{socket.gethostname()}:{PORT}"
+                )
             except Exception as ex:
                 err_lbl.config(text=f"✗  {ex}")
 
@@ -1075,14 +1111,13 @@ def run_gui():
                 with open(SERVER_CFG_PATH, 'w') as f:
                     json.dump(cfg, f, indent=2)
                 dlg.destroy()
-                mb.showinfo("SSL Removed",
-                            "✓  Certificate removed.\nRestart the server to revert to HTTP.")
+                _restart_server("✓  Certificate removed.")
             except Exception as ex:
                 err_lbl.config(text=f"✗  {ex}")
 
         btn_frm = tk.Frame(dlg, bg="#1e2a3a")
         btn_frm.pack(fill="x", padx=18, pady=(6, 12))
-        tk.Button(btn_frm, text="🔒  Install Certificate  (restart to apply)",
+        tk.Button(btn_frm, text="🔒  Install Certificate",
                   bg="#1a7a4a", fg="white", font=("Segoe UI", 10, "bold"),
                   relief="flat", cursor="hand2", pady=9,
                   command=do_install,
