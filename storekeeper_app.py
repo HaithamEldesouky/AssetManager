@@ -88,9 +88,15 @@ class _SelfSignedAdapter(HTTPAdapter):
 def api(method, url, **kw):
     kw.setdefault("timeout", 7)
     if url.startswith("https"):
-        s = requests.Session()
-        s.mount("https://", _SelfSignedAdapter(_SSL_CERT_PATH))
-        return getattr(s, method)(url, **kw)
+        try:
+            s = requests.Session()
+            s.mount("https://", _SelfSignedAdapter(_SSL_CERT_PATH))
+            return getattr(s, method)(url, **kw)
+        except requests.exceptions.SSLError as _e:
+            if "WRONG_VERSION_NUMBER" in str(_e) or "wrong version number" in str(_e).lower():
+                # Server is running HTTP — fall back transparently
+                return getattr(requests, method)(url.replace("https://", "http://", 1), **kw)
+            raise
     return getattr(requests, method)(url, **kw)
 
 # ─── Date Range Export Dialog ─────────────────────────────────────────────────
