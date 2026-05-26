@@ -33,7 +33,7 @@ pyinstaller --noconfirm --onefile --windowed --name "NotifierApp" notifier_app.p
 if errorlevel 1 ( echo [ERROR] Notifier build failed. & pause & exit /b 1 )
 
 echo [5/7] Building AssetManager_Setup.exe (unified installer)...
-pyinstaller --noconfirm --onefile --windowed --name "AssetManager_Setup" ^
+pyinstaller --noconfirm --onefile --windowed --uac-admin --name "AssetManager_Setup" ^
   --add-data "dist\AssetServer.exe;."    ^
   --add-data "dist\StorekeeperApp.exe;." ^
   --add-data "dist\NotifierApp.exe;."    ^
