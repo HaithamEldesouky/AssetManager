@@ -52,6 +52,7 @@ else:
     _INSTALLER_DIR = os.path.dirname(os.path.abspath(__file__))
 
 _SSL_CERT_PATH = os.path.join(_INSTALLER_DIR, "ssl_cert.pem")
+_SSL_KEY_PATH  = os.path.join(_INSTALLER_DIR, "ssl_key.pem")
 
 class _SelfSignedAdapter(HTTPAdapter):
     """Trust a specific self-signed cert; skip hostname check (internal network)."""
@@ -78,9 +79,14 @@ class _SelfSignedAdapter(HTTPAdapter):
 def api(method, url, **kw):
     kw.setdefault("timeout", 7)
     if url.startswith("https"):
-        s = requests.Session()
-        s.mount("https://", _SelfSignedAdapter(_SSL_CERT_PATH))
-        return getattr(s, method)(url, **kw)
+        try:
+            s = requests.Session()
+            s.mount("https://", _SelfSignedAdapter(_SSL_CERT_PATH))
+            return getattr(s, method)(url, **kw)
+        except requests.exceptions.SSLError as _e:
+            if "WRONG_VERSION_NUMBER" in str(_e) or "wrong version number" in str(_e).lower():
+                return getattr(requests, method)(url.replace("https://", "http://", 1), **kw)
+            raise
     return getattr(requests, method)(url, **kw)
 
 def _bundled_path(name):
@@ -415,9 +421,13 @@ class InstallerApp:
             dst = os.path.join(dest_dir, BUNDLED_EXES["server"])
             shutil.copy2(exe_src, dst)
             cert_copied = False
+            key_copied  = False
             if os.path.exists(_SSL_CERT_PATH):
                 shutil.copy2(_SSL_CERT_PATH, os.path.join(dest_dir, "ssl_cert.pem"))
                 cert_copied = True
+            if os.path.exists(_SSL_KEY_PATH):
+                shutil.copy2(_SSL_KEY_PATH, os.path.join(dest_dir, "ssl_key.pem"))
+                key_copied = True
 
             # Write admin_config.json with hashed password
             admin_cfg = {
@@ -433,21 +443,23 @@ class InstallerApp:
                 # Reinstall — keep existing config (host, port, ssl_enabled, etc.)
                 pass
             else:
-                # Fresh install — enable SSL automatically if a cert was bundled
+                # Fresh install — enable SSL only when BOTH cert and key were bundled
                 srv_cfg = {"host": "0.0.0.0", "port": 8081}
-                if cert_copied:
+                if cert_copied and key_copied:
                     srv_cfg["ssl_enabled"] = True
                 with open(srv_cfg_path, "w") as f:
                     json.dump(srv_cfg, f, indent=2)
 
-            # Register and start the Windows Service
+            # Register the Windows Service then start it in background
+            # (onefile EXE extraction takes time; we don't block the installer)
             svc_note = ""
             try:
                 subprocess.run([dst, "install"], check=True,
-                               capture_output=True, timeout=30)
-                subprocess.run(["net", "start", "AssetManagerServer"], check=True,
-                               capture_output=True, timeout=30)
-                svc_note = "\n\n✅  Windows Service registered and started automatically."
+                               capture_output=True, timeout=60)
+                # Fire-and-forget — service starts in background, no timeout risk
+                subprocess.Popen(["net", "start", "AssetManagerServer"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                svc_note = "\n\n✅  Windows Service registered and starting in background."
             except subprocess.CalledProcessError as svc_err:
                 svc_note = (
                     "\n\n⚠️  Service registration failed (run installer as Administrator).\n"

@@ -33,11 +33,14 @@ pyinstaller --noconfirm --onefile --windowed --name "NotifierApp" notifier_app.p
 if errorlevel 1 ( echo [ERROR] Notifier build failed. & pause & exit /b 1 )
 
 echo [5/7] Building AssetManager_Setup.exe (unified installer)...
+set SSL_ARGS=
+if exist "ssl_cert.pem" set SSL_ARGS=--add-data "ssl_cert.pem;."
+if exist "ssl_key.pem"  set SSL_ARGS=%SSL_ARGS% --add-data "ssl_key.pem;."
 pyinstaller --noconfirm --onefile --windowed --uac-admin --name "AssetManager_Setup" ^
   --add-data "dist\AssetServer.exe;."    ^
   --add-data "dist\StorekeeperApp.exe;." ^
   --add-data "dist\NotifierApp.exe;."    ^
-  installer.py
+  %SSL_ARGS% installer.py
 if errorlevel 1 ( echo [ERROR] Installer build failed. & pause & exit /b 1 )
 
 echo [6/7] Copying deliverables to output\...
@@ -47,6 +50,7 @@ copy /Y "dist\NotifierApp.exe"        "output\"
 copy /Y "dist\AssetManager_Setup.exe" "output\"
 copy /Y "config.json"                 "output\"
 if exist "ssl_cert.pem" copy /Y "ssl_cert.pem" "output\"
+if exist "ssl_key.pem"  copy /Y "ssl_key.pem"  "output\"
 
 echo [7/7] Cleaning up PyInstaller temp files...
 rmdir /S /Q build 2>nul

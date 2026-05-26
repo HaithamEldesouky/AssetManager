@@ -1129,7 +1129,8 @@ def run_gui():
         try:
             import requests as req, ssl as _ssl
             from requests.adapters import HTTPAdapter as _HA
-            _ssl_on = _SERVER_CFG.get('ssl_enabled') and os.path.exists(SSL_CERT_PATH)
+            _ssl_on = (_SERVER_CFG.get('ssl_enabled') and
+                       os.path.exists(SSL_CERT_PATH) and os.path.exists(SSL_KEY_PATH))
             _proto  = "https" if _ssl_on else "http"
             if _ssl_on:
                 class _A(_HA):
