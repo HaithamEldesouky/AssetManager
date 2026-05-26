@@ -1151,7 +1151,7 @@ def run_gui():
         except: pass
         root.after(5000, refresh_stats)
 
-    refresh_stats()
+    root.after(1500, refresh_stats)   # first poll after 1.5 s — Flask is guaranteed ready
 
     # Update tray tooltip periodically to reflect SSL state
     def _update_tray_title():
@@ -1271,6 +1271,6 @@ if __name__ == '__main__':
             pass
         else:
             threading.Thread(target=_run_flask, daemon=True).start()
-            time.sleep(0.8)
+            time.sleep(1.5)  # give Flask enough time to bind before the GUI polls it
 
         run_gui()

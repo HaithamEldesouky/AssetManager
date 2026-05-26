@@ -414,8 +414,11 @@ class InstallerApp:
             os.makedirs(dest_dir, exist_ok=True)
             dst = os.path.join(dest_dir, BUNDLED_EXES["server"])
             shutil.copy2(exe_src, dst)
+            cert_copied = False
             if os.path.exists(_SSL_CERT_PATH):
                 shutil.copy2(_SSL_CERT_PATH, os.path.join(dest_dir, "ssl_cert.pem"))
+                cert_copied = True
+
             # Write admin_config.json with hashed password
             admin_cfg = {
                 "password_hash": hashlib.sha256(pw.encode()).hexdigest(),
@@ -423,6 +426,19 @@ class InstallerApp:
             }
             with open(os.path.join(dest_dir, "admin_config.json"), "w") as f:
                 json.dump(admin_cfg, f, indent=2)
+
+            # Preserve or create server_config.json
+            srv_cfg_path = os.path.join(dest_dir, "server_config.json")
+            if os.path.exists(srv_cfg_path):
+                # Reinstall — keep existing config (host, port, ssl_enabled, etc.)
+                pass
+            else:
+                # Fresh install — enable SSL automatically if a cert was bundled
+                srv_cfg = {"host": "0.0.0.0", "port": 8081}
+                if cert_copied:
+                    srv_cfg["ssl_enabled"] = True
+                with open(srv_cfg_path, "w") as f:
+                    json.dump(srv_cfg, f, indent=2)
 
             # Register and start the Windows Service
             svc_note = ""
