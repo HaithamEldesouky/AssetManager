@@ -741,7 +741,22 @@ class NotifierApp:
                   command=finish,
                   activebackground=ACCENT2).pack(fill="x", padx=20, pady=6)
 
+    def _register_autostart(self):
+        if not getattr(sys, 'frozen', False):
+            return
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                0, winreg.KEY_SET_VALUE)
+            winreg.SetValueEx(key, "AssetManagerNotifier", 0, winreg.REG_SZ, sys.executable)
+            winreg.CloseKey(key)
+        except Exception:
+            pass
+
     def run(self):
+        self._register_autostart()
         self._check_first_run()
         if HAS_TRAY:
             threading.Thread(target=self._build_tray, daemon=True).start()

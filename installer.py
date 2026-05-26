@@ -381,6 +381,16 @@ class InstallerApp:
             shutil.copy2(exe_src, dst)
             if os.path.exists(_SSL_CERT_PATH):
                 shutil.copy2(_SSL_CERT_PATH, os.path.join(dest_dir, "ssl_cert.pem"))
+            try:
+                import winreg
+                rkey = winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Run",
+                    0, winreg.KEY_SET_VALUE)
+                winreg.SetValueEx(rkey, "AssetManagerNotifier", 0, winreg.REG_SZ, dst)
+                winreg.CloseKey(rkey)
+            except Exception:
+                pass
             cfg = {
                 "server_url":     server_url,
                 "current_user":   member,
