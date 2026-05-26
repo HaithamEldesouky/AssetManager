@@ -515,9 +515,10 @@ def run_gui():
 
     root = tk.Tk()
     root.title("Asset Manager — Server")
-    root.geometry("530x680")
+    root.geometry("530x760")
+    root.minsize(530, 720)
     root.configure(bg="#1e2a3a")
-    root.resizable(False, False)
+    root.resizable(False, True)
 
     _tray_icon = [None]
     _minimised_to_tray = [False]
@@ -1138,7 +1139,7 @@ def run_gui():
 
     # Stats
     stats_card = tk.Frame(root, bg="#243447", padx=14, pady=12)
-    stats_card.pack(fill="x", padx=18, pady=(0, 10))
+    stats_card.pack(fill="x", padx=18, pady=(0, 18))
     tk.Label(stats_card, text="Live Statistics",
              bg="#243447", fg="#0078d4",
              font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 6))
