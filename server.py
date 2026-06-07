@@ -10,7 +10,7 @@ Asset Manager — Server
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import sqlite3, json, os, sys, socket, threading, time, hashlib, secrets, base64, io, ctypes
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # pywin32 — optional; required only for Windows Service mode
 try:
@@ -157,8 +157,66 @@ def init_db():
         c.execute("ALTER TABLE transactions ADD COLUMN asset_number TEXT DEFAULT ''")
     if 'asset_model' not in cols:
         c.execute("ALTER TABLE transactions ADD COLUMN asset_model TEXT DEFAULT ''")
+    c.execute("""CREATE TABLE IF NOT EXISTS team_members (
+        name         TEXT PRIMARY KEY,
+        auto_approve INTEGER DEFAULT 0
+    )""")
+    if c.execute("SELECT COUNT(*) FROM team_members").fetchone()[0] == 0:
+        for nm in ["Engineer 1", "Engineer 2", "Engineer 3", "Engineer 4"]:
+            c.execute("INSERT OR IGNORE INTO team_members(name, auto_approve) VALUES (?,0)", (nm,))
     conn.commit()
     conn.close()
+
+
+_ARCHIVE_COLS = ["id", "asset_type", "serial_number", "asset_number", "asset_model",
+                 "team_member", "direction", "timestamp", "confirmed", "rejected",
+                 "confirmed_at", "rejection_reason", "notes", "storekeeper"]
+
+def _export_records_xlsx(path):
+    import openpyxl
+    conn = get_db()
+    rows = conn.execute(f"SELECT {','.join(_ARCHIVE_COLS)} FROM transactions ORDER BY id").fetchall()
+    conn.close()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Asset Records Archive"
+    ws.append(_ARCHIVE_COLS)
+    for r in rows:
+        ws.append([r[c] for c in _ARCHIVE_COLS])
+    wb.save(path)
+    return len(rows)
+
+def _import_records_xlsx(path):
+    import openpyxl
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    ws = wb.active
+    data = list(ws.iter_rows(values_only=True))
+    wb.close()
+    if not data:
+        return 0
+    header = [str(h).strip() if h else "" for h in data[0]]
+    idx = {h: i for i, h in enumerate(header)}
+    insert_cols = [c for c in _ARCHIVE_COLS if c != "id"]
+    conn = get_db()
+    n = 0
+    for row in data[1:]:
+        if not row:
+            continue
+        vals = []
+        for c in insert_cols:
+            v = row[idx[c]] if c in idx and idx[c] < len(row) else None
+            vals.append('' if v is None else v)
+        conn.execute(
+            f"INSERT INTO transactions ({','.join(insert_cols)}) "
+            f"VALUES ({','.join(['?'] * len(insert_cols))})", vals)
+        n += 1
+    conn.commit()
+    conn.close()
+    return n
+
+def simple_password_prompt(parent, title, message):
+    from tkinter import simpledialog
+    return simpledialog.askstring(title, message + "\n\nAdmin password:", show="*", parent=parent)
 
 # ─── Lookup helpers ───────────────────────────────────────────────────────────
 
@@ -264,11 +322,18 @@ def create_transaction():
             conn.close()
             return jsonify({"error": "This asset already has a pending transaction. Confirm or reject it first."}), 409
 
+    auto_row = conn.execute(
+        "SELECT auto_approve FROM team_members WHERE name=?", (data['team_member'],)
+    ).fetchone()
+    auto_approve = bool(auto_row and auto_row['auto_approve'])
+    now_iso = datetime.now().isoformat()
+
     cur  = conn.execute(
         '''INSERT INTO transactions
            (asset_type, serial_number, asset_number, asset_model,
-            team_member, direction, timestamp, notes, storekeeper)
-           VALUES (?,?,?,?,?,?,?,?,?)''',
+            team_member, direction, timestamp, notes, storekeeper,
+            confirmed, confirmed_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
         (
             data.get('asset_type',   'Laptop'),
             serial_no,
@@ -276,15 +341,18 @@ def create_transaction():
             (data.get('asset_model', '') or '').strip(),
             data['team_member'],
             data['direction'],
-            datetime.now().isoformat(),
+            now_iso,
             data.get('notes', ''),
             data.get('storekeeper', 'Storekeeper User'),
+            1 if auto_approve else 0,
+            now_iso if auto_approve else '',
         )
     )
     conn.commit()
     new_id = cur.lastrowid
     conn.close()
-    return jsonify({"id": new_id, "status": "created"}), 201
+    return jsonify({"id": new_id, "status": "auto_approved" if auto_approve else "created",
+                    "auto_approved": auto_approve}), 201
 
 @app.route('/pending/<path:member>')
 def get_pending(member):
@@ -334,6 +402,48 @@ def export_all():
     rows = conn.execute('SELECT * FROM transactions ORDER BY timestamp DESC').fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
+
+@app.route('/members', methods=['GET'])
+def list_members():
+    conn = get_db()
+    rows = conn.execute('SELECT name, auto_approve FROM team_members ORDER BY name').fetchall()
+    conn.close()
+    return jsonify([{"name": r["name"], "auto_approve": bool(r["auto_approve"])} for r in rows])
+
+@app.route('/members', methods=['POST'])
+def add_member():
+    data = request.json or {}
+    if sha256(data.get('password', '')) != ADMIN_CFG['password_hash']:
+        return jsonify({"error": "Wrong admin password"}), 401
+    name = (data.get('name', '') or '').strip()
+    if not name:
+        return jsonify({"error": "Name required"}), 400
+    auto = 1 if data.get('auto_approve') else 0
+    conn = get_db()
+    conn.execute("INSERT OR REPLACE INTO team_members(name, auto_approve) VALUES (?,?)", (name, auto))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok", "name": name, "auto_approve": bool(auto)})
+
+@app.route('/transactions/delete', methods=['POST'])
+def delete_transactions():
+    data = request.json or {}
+    if sha256(data.get('password', '')) != ADMIN_CFG['password_hash']:
+        return jsonify({"error": "Wrong admin password"}), 401
+    ids = data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({"error": "No record ids provided"}), 400
+    try:
+        ids = [int(i) for i in ids]
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid ids"}), 400
+    conn = get_db()
+    qmarks = ",".join("?" * len(ids))
+    cur = conn.execute(f"DELETE FROM transactions WHERE id IN ({qmarks})", ids)
+    conn.commit()
+    deleted = cur.rowcount
+    conn.close()
+    return jsonify({"status": "ok", "deleted": deleted})
 
 # ─── Lookup routes ────────────────────────────────────────────────────────────
 
@@ -768,7 +878,7 @@ def run_gui():
         import tkinter.messagebox as mb
         dlg = tk.Toplevel(root)
         dlg.title("Clear All Records")
-        dlg.geometry("400x310")
+        dlg.geometry("400x380")
         dlg.configure(bg="#1e2a3a")
         dlg.resizable(False, False)
         dlg.grab_set()
@@ -795,11 +905,18 @@ def run_gui():
                         insertbackground="#ffffff")
         pw_e.pack(fill="x", ipady=7)
 
+        archive_var = tk.IntVar(value=1)
+        tk.Checkbutton(frm, text="Export all records to an archive file first",
+                       variable=archive_var, bg="#243447", fg="#e8edf2",
+                       selectcolor="#2a3f55", activebackground="#243447",
+                       activeforeground="#e8edf2", font=("Segoe UI", 9)).pack(anchor="w", pady=(10, 0))
+
         err_lbl = tk.Label(dlg, text="", bg="#1e2a3a", fg="#f44336",
                            font=("Segoe UI", 9))
         err_lbl.pack(pady=(2, 0))
 
         def do_clear():
+            import tkinter.filedialog as fd
             pw = pw_e.get()
             if not pw:
                 err_lbl.config(text="✗  Password is required.")
@@ -807,6 +924,20 @@ def run_gui():
             if sha256(pw) != ADMIN_CFG['password_hash']:
                 err_lbl.config(text="✗  Incorrect password.")
                 return
+            if archive_var.get():
+                default_name = "AssetManager_Archive_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx"
+                save_path = fd.asksaveasfilename(
+                    parent=dlg, title="Save records archive",
+                    defaultextension=".xlsx", initialfile=default_name,
+                    filetypes=[("Excel archive", "*.xlsx")])
+                if not save_path:
+                    err_lbl.config(text="✗  Archive cancelled — nothing deleted.")
+                    return
+                try:
+                    cnt = _export_records_xlsx(save_path)
+                except Exception as ex:
+                    err_lbl.config(text=f"✗  Archive failed: {ex}")
+                    return
             if not mb.askyesno("Confirm Delete",
                                "Are you sure?\n\nThis will delete ALL transaction records permanently.\nThis cannot be undone.",
                                icon="warning"):
@@ -817,7 +948,10 @@ def run_gui():
                 conn.commit()
                 conn.close()
                 dlg.destroy()
-                mb.showinfo("Done", "✓  All records have been deleted.")
+                msg = "✓  All records have been deleted."
+                if archive_var.get():
+                    msg += f"\n\nArchived {cnt} record(s) to:\n{save_path}"
+                mb.showinfo("Done", msg)
             except Exception as ex:
                 err_lbl.config(text=f"✗  Error: {ex}")
 
@@ -834,6 +968,97 @@ def run_gui():
               relief="flat", cursor="hand2", pady=8,
               command=clear_all_records,
               activebackground="#7b241c").pack(fill="x", padx=18, pady=(0, 4))
+
+    def import_archive():
+        import tkinter.messagebox as mb
+        import tkinter.filedialog as fd
+        pw = simple_password_prompt(root, "Import Archive",
+                                    "Restore records from an archive file (.xlsx).\n"
+                                    "Records are appended to the current database.")
+        if pw is None:
+            return
+        if sha256(pw) != ADMIN_CFG['password_hash']:
+            mb.showerror("Import Archive", "Incorrect admin password.")
+            return
+        path = fd.askopenfilename(parent=root, title="Open records archive",
+                                  filetypes=[("Excel archive", "*.xlsx")])
+        if not path:
+            return
+        try:
+            n = _import_records_xlsx(path)
+            mb.showinfo("Import Archive", f"Imported {n} record(s) from the archive.")
+        except Exception as ex:
+            mb.showerror("Import Archive", f"Import failed: {ex}")
+
+    tk.Button(root, text="📥  Import Archive",
+              bg="#2a5e8a", fg="white", font=("Segoe UI", 9, "bold"),
+              relief="flat", cursor="hand2", pady=8,
+              command=import_archive, activebackground="#1a4060").pack(fill="x", padx=18, pady=(0, 4))
+
+    def manage_records():
+        import tkinter.messagebox as mb
+        from tkinter import ttk
+        win = tk.Toplevel(root)
+        win.title("Manage Records")
+        win.geometry("760x460")
+        win.configure(bg="#1e2a3a")
+        win.transient(root)
+        tk.Label(win, text="Manage Records  —  select one or more rows to delete",
+                 bg="#1e2a3a", fg="#e8edf2", font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=14, pady=(12, 6))
+        cols = ("id", "asset_number", "serial_number", "type", "member", "direction", "status", "date")
+        tree = ttk.Treeview(win, columns=cols, show="headings", selectmode="extended", height=15)
+        widths = {"id": 45, "asset_number": 95, "serial_number": 95, "type": 80,
+                  "member": 130, "direction": 75, "status": 80, "date": 120}
+        for cc in cols:
+            tree.heading(cc, text=cc.replace("_", " ").title())
+            tree.column(cc, width=widths[cc], anchor="w")
+        tree.pack(fill="both", expand=True, padx=14, pady=4)
+        def load_rows():
+            tree.delete(*tree.get_children())
+            conn = get_db()
+            rows = conn.execute("SELECT * FROM transactions ORDER BY id DESC").fetchall()
+            conn.close()
+            for r in rows:
+                status = "Confirmed" if r["confirmed"] else ("Rejected" if r["rejected"] else "Pending")
+                ds = r["timestamp"]
+                try: ds = datetime.fromisoformat(ds).strftime("%d/%m/%Y %H:%M")
+                except Exception: pass
+                tree.insert("", "end", values=(r["id"], r["asset_number"], r["serial_number"],
+                            r["asset_type"], r["team_member"], r["direction"], status, ds))
+        load_rows()
+        def delete_selected():
+            sel = tree.selection()
+            if not sel:
+                mb.showinfo("Manage Records", "Select one or more rows first.")
+                return
+            ids = [int(tree.item(s)["values"][0]) for s in sel]
+            pw = simple_password_prompt(win, "Delete Records",
+                                        f"Delete {len(ids)} selected record(s)? This cannot be undone.")
+            if pw is None:
+                return
+            if sha256(pw) != ADMIN_CFG['password_hash']:
+                mb.showerror("Delete Records", "Incorrect admin password.")
+                return
+            conn = get_db()
+            qmarks = ",".join("?" * len(ids))
+            conn.execute(f"DELETE FROM transactions WHERE id IN ({qmarks})", ids)
+            conn.commit()
+            conn.close()
+            load_rows()
+            mb.showinfo("Delete Records", f"Deleted {len(ids)} record(s).")
+        btnf = tk.Frame(win, bg="#1e2a3a")
+        btnf.pack(fill="x", padx=14, pady=(4, 12))
+        tk.Button(btnf, text="🗑  Delete Selected", bg="#c0392b", fg="white",
+                  font=("Segoe UI", 9, "bold"), relief="flat", cursor="hand2", pady=7,
+                  command=delete_selected, activebackground="#922b21").pack(side="left")
+        tk.Button(btnf, text="↻  Refresh", bg="#2a5e8a", fg="white",
+                  font=("Segoe UI", 9, "bold"), relief="flat", cursor="hand2", pady=7,
+                  command=load_rows, activebackground="#1a4060").pack(side="left", padx=8)
+
+    tk.Button(root, text="🗂  Manage / Delete Records",
+              bg="#2a5e8a", fg="white", font=("Segoe UI", 9, "bold"),
+              relief="flat", cursor="hand2", pady=8,
+              command=manage_records, activebackground="#1a4060").pack(fill="x", padx=18, pady=(0, 4))
 
     # ─── SSL Certificate ──────────────────────────────────────────────────────
     def _cert_to_pem(cert_path, key_path=None, pfx_password=None):
@@ -1204,8 +1429,36 @@ def run_gui():
 
 # ─── Flask runner (shared by interactive mode and Windows Service) ────────────
 
+_AUTO_JOBS_STARTED = [False]
+
+def _auto_accept_stale_pending():
+    """Background job: auto-confirm transactions left pending for more than 24h."""
+    while True:
+        try:
+            cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
+            conn = get_db()
+            conn.execute(
+                "UPDATE transactions SET confirmed=1, confirmed_at=? "
+                "WHERE confirmed=0 AND rejected=0 AND timestamp < ?",
+                (datetime.now().isoformat(), cutoff)
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        time.sleep(3600)
+
+
+def _start_background_jobs():
+    if _AUTO_JOBS_STARTED[0]:
+        return
+    _AUTO_JOBS_STARTED[0] = True
+    threading.Thread(target=_auto_accept_stale_pending, daemon=True).start()
+
+
 def _run_flask():
     """Start the Flask server (blocking). Chooses HTTP or HTTPS automatically."""
+    _start_background_jobs()
     ssl_ctx = None
     if (_SERVER_CFG.get('ssl_enabled') and
             os.path.exists(SSL_CERT_PATH) and os.path.exists(SSL_KEY_PATH)):

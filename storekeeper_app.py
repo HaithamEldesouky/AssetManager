@@ -17,6 +17,8 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+BUFFER_PATH = os.path.join(BASE_DIR, "pending_buffer.json")
+SEEN_REJECTIONS_PATH = os.path.join(BASE_DIR, "seen_rejections.json")
 
 DEFAULT_CFG = {
     "server_url": "https://asset-server:8081"
@@ -487,7 +489,9 @@ class StorekeeperApp:
         self._lookup_locked   = False  # True when type was auto-set
         self._bulk_mode       = False  # bulk scan mode toggle
         self._bulk_queue      = []     # list of dicts queued for bulk submit
-        self._server_check_timer = None  # track after() timer to prevent leaks
+        self._server_check_timer = None
+        self._members         = list(TEAM_MEMBERS)
+        self._seen_rejected   = set()  # track after() timer to prevent leaks
 
         self.root.title("Asset Manager — Storekeeper")
         self.root.geometry("1120x740")
@@ -499,6 +503,9 @@ class StorekeeperApp:
         self._build_ui()
         self._check_server()
         self._refresh_transactions()
+        self._load_members()
+        self._init_seen_rejected()
+        self.root.after(3000, self._tick_background)
 
     def _setup_styles(self):
         s = ttk.Style()
@@ -626,9 +633,13 @@ class StorekeeperApp:
         self.v_type.pack(fill="x", ipady=4)
 
         lbl("Assign To", required=True)
-        self.v_member = ttk.Combobox(frm, values=TEAM_MEMBERS, state="readonly",
+        self.v_member = ttk.Combobox(frm, values=self._members, state="readonly",
                                      font=("Segoe UI", 10))
         self.v_member.pack(fill="x", ipady=4)
+        tk.Button(frm, text="➕  Add Engineer", bg=CARD2, fg=ACCENT,
+                  font=("Segoe UI", 8, "bold"), relief="flat", cursor="hand2",
+                  command=self._add_engineer_dialog,
+                  activebackground=INPUT_BG).pack(anchor="e", pady=(3, 0))
 
         lbl("Transaction Type", required=True)
         dir_f = tk.Frame(frm, bg=CARD)
@@ -830,8 +841,7 @@ class StorekeeperApp:
                         found_data = d
                         break
             except requests.exceptions.ConnectionError:
-                messagebox.showerror("Connection Error",
-                    f"Cannot reach server at:\n{self.server_url}")
+                self._buffer_offline_submit()
                 return
             except Exception as e:
                 messagebox.showerror("Error", f"Lookup failed: {e}")
@@ -894,8 +904,12 @@ class StorekeeperApp:
                 err = r.json().get("error", r.status_code)
                 messagebox.showerror("Server Error", err)
         except requests.exceptions.ConnectionError:
-            messagebox.showerror("Connection Error",
-                f"Cannot reach server at:\n{self.server_url}")
+            self._buffer_add(payload)
+            messagebox.showinfo("Saved Offline",
+                "The server is offline. This transaction was saved to a local buffer "
+                "and will be sent automatically when the server is back online.")
+            self._clear_form()
+            self._refresh_transactions()
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
@@ -905,6 +919,175 @@ class StorekeeperApp:
         self.v_member.set("")
         self.v_direction.set("Out Store")
         self._unlock_type()
+
+    def _load_members(self):
+        try:
+            r = api("get", f"{self.server_url}/members", timeout=5)
+            if r.ok:
+                names = [m["name"] for m in r.json()]
+                if names:
+                    self._members = names
+                    cur = self.v_member.get()
+                    self.v_member["values"] = names
+                    if cur in names:
+                        self.v_member.set(cur)
+        except Exception:
+            pass
+
+    def _add_engineer_dialog(self):
+        dlg = tk.Toplevel(self.root); dlg.title("Add Engineer")
+        dlg.configure(bg=BG); dlg.geometry("370x320"); dlg.grab_set(); dlg.transient(self.root)
+        tk.Label(dlg, text="Add Engineer", bg=ACCENT, fg="white",
+                 font=("Segoe UI", 11, "bold")).pack(fill="x", ipady=10)
+        frm = tk.Frame(dlg, bg=CARD2, padx=18, pady=12); frm.pack(fill="both", expand=True, padx=14, pady=12)
+        def fld(text):
+            tk.Label(frm, text=text, bg=CARD2, fg=SUBTEXT, font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 2))
+        fld("Engineer Name")
+        name_e = tk.Entry(frm, bg=INPUT_BG, fg=TEXT, relief="flat", font=("Segoe UI", 10), insertbackground=TEXT)
+        name_e.pack(fill="x", ipady=6)
+        auto_var = tk.IntVar(value=0)
+        tk.Checkbutton(frm, text="Auto-approve (no Notifier - transactions auto-confirmed)",
+                       variable=auto_var, bg=CARD2, fg=TEXT, selectcolor=INPUT_BG,
+                       activebackground=CARD2, activeforeground=TEXT,
+                       font=("Segoe UI", 8), wraplength=300, justify="left").pack(anchor="w", pady=(8, 0))
+        fld("Admin Password")
+        pw_e = tk.Entry(frm, show="*", bg=INPUT_BG, fg=TEXT, relief="flat", font=("Segoe UI", 10), insertbackground=TEXT)
+        pw_e.pack(fill="x", ipady=6)
+        err = tk.Label(dlg, text="", bg=BG, fg=DANGER, font=("Segoe UI", 9)); err.pack()
+        def do_add():
+            nm = name_e.get().strip(); pw = pw_e.get()
+            if not nm: err.config(text="Enter a name."); return
+            if not pw: err.config(text="Enter the admin password."); return
+            try:
+                r = api("post", f"{self.server_url}/members",
+                        json={"password": pw, "name": nm, "auto_approve": bool(auto_var.get())}, timeout=6)
+                if r.status_code == 401:
+                    err.config(text="Wrong admin password."); return
+                if r.ok:
+                    self._load_members(); self.v_member.set(nm); dlg.destroy()
+                    messagebox.showinfo("Engineer Added", f"{nm} added" + ("  (auto-approve)" if auto_var.get() else "") + ".")
+                else:
+                    err.config(text=str(r.json().get("error", r.status_code)))
+            except Exception as e:
+                err.config(text=str(e))
+        tk.Button(dlg, text="Add Engineer", bg=ACCENT, fg="white", font=("Segoe UI", 10, "bold"),
+                  relief="flat", cursor="hand2", pady=9, command=do_add, activebackground=ACCENT2).pack(fill="x", padx=14, pady=(0, 12))
+        name_e.focus_set()
+
+    def _buffer_load(self):
+        try:
+            if os.path.exists(BUFFER_PATH):
+                with open(BUFFER_PATH, encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return []
+
+    def _buffer_save(self, items):
+        try:
+            with open(BUFFER_PATH, "w", encoding="utf-8") as f:
+                json.dump(items, f, indent=2)
+        except Exception:
+            pass
+
+    def _buffer_add(self, payload):
+        items = self._buffer_load(); items.append(payload); self._buffer_save(items)
+
+    def _buffer_offline_submit(self):
+        self._buffer_add({
+            "asset_number":  self.v_asset_no.get().strip(),
+            "serial_number": self.v_serial.get().strip(),
+            "asset_type":    self.v_type.get(),
+            "asset_model":   self.v_model.get().strip(),
+            "team_member":   self.v_member.get(),
+            "direction":     self.v_direction.get(),
+            "notes":         self.v_notes.get().strip(),
+            "storekeeper":   "Storekeeper User",
+        })
+        messagebox.showinfo("Saved Offline",
+            "The server is offline. This transaction was saved to a local buffer "
+            "and will be sent automatically when the server is back online.")
+        self._clear_form()
+
+    def _flush_buffer(self):
+        items = self._buffer_load()
+        if not items:
+            return
+        remaining, sent = [], 0
+        for payload in items:
+            try:
+                r = api("post", f"{self.server_url}/transactions", json=payload, timeout=5)
+                if r.status_code in (201, 409):
+                    sent += 1
+                else:
+                    remaining.append(payload)
+            except Exception:
+                remaining.append(payload)
+        self._buffer_save(remaining)
+        if sent:
+            self._refresh_transactions()
+
+    def _seen_load(self):
+        try:
+            if os.path.exists(SEEN_REJECTIONS_PATH):
+                with open(SEEN_REJECTIONS_PATH, encoding="utf-8") as f:
+                    return set(json.load(f))
+        except Exception:
+            pass
+        return None
+
+    def _seen_save(self):
+        try:
+            with open(SEEN_REJECTIONS_PATH, "w", encoding="utf-8") as f:
+                json.dump(sorted(self._seen_rejected), f)
+        except Exception:
+            pass
+
+    def _init_seen_rejected(self):
+        stored = self._seen_load()
+        if stored is not None:
+            self._seen_rejected = stored
+            return
+        try:
+            r = api("get", f"{self.server_url}/export", timeout=5)
+            if r.ok:
+                for t in r.json():
+                    if t.get("rejected"):
+                        self._seen_rejected.add(t["id"])
+        except Exception:
+            pass
+        self._seen_save()
+
+    def _poll_rejections(self):
+        try:
+            r = api("get", f"{self.server_url}/export", timeout=5)
+            if not r.ok:
+                return
+            for t in r.json():
+                if t.get("rejected") and t["id"] not in self._seen_rejected:
+                    self._seen_rejected.add(t["id"])
+                    self._seen_save()
+                    self._notify_rejection(t)
+        except Exception:
+            pass
+
+    def _notify_rejection(self, t):
+        aid    = t.get("asset_number") or t.get("serial_number") or "?"
+        reason = t.get("rejection_reason") or "(no reason given)"
+        messagebox.showwarning("Transaction Rejected",
+            f"{t.get('team_member', '?')} rejected a transaction.\n\n"
+            f"Asset: {aid}\n"
+            f"Type: {t.get('asset_type', '')}\n"
+            f"Direction: {t.get('direction', '')}\n\n"
+            f"Reason: {reason}")
+
+    def _tick_background(self):
+        try:
+            self._flush_buffer()
+            self._poll_rejections()
+        except Exception:
+            pass
+        self.root.after(60000, self._tick_background)
 
     # ── Asset Lookup (auto-fill) ──────────────────────────────────────────────
 
@@ -1042,10 +1225,10 @@ class StorekeeperApp:
 
         tk.Label(cfg_frm, text="Engineer:", bg=CARD2, fg=SUBTEXT,
                  font=("Segoe UI", 9)).grid(row=0, column=0, sticky="w", padx=(0, 8))
-        self._bulk_member = ttk.Combobox(cfg_frm, values=TEAM_MEMBERS,
+        self._bulk_member = ttk.Combobox(cfg_frm, values=self._members,
                                           state="readonly", font=("Segoe UI", 10), width=20)
         m = self.v_member.get()
-        self._bulk_member.set(m if m else TEAM_MEMBERS[0])
+        self._bulk_member.set(m if m else (self._members[0] if self._members else ""))
         self._bulk_member.grid(row=0, column=1, padx=(0, 20))
 
         tk.Label(cfg_frm, text="Direction:", bg=CARD2, fg=SUBTEXT,
