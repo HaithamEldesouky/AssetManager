@@ -391,16 +391,13 @@ class InstallerApp:
                 json.dump(cfg, f, indent=2)
 
             _create_shortcut(dst, f"Asset Notifier \u2014 {member.split()[0]}")
-            _create_shortcut(dst, "AssetManagerNotifier",
-                             folder=os.path.join(os.environ.get("APPDATA", ""),
-                                                 r"Microsoft\Windows\Start Menu\Programs\Startup"))
 
             messagebox.showinfo(
                 "Installation Complete \u2714",
                 f"\u2705  Notifier installed successfully for  {member}\n\n"
                 f"Location: {dst}\n\n"
                 "A Desktop shortcut has been created.\n"
-                "The app will start automatically with Windows."
+                "Launch it from the Desktop shortcut to begin."
             )
             self.root.destroy()
         except Exception as e:
