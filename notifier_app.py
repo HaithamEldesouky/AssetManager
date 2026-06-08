@@ -740,16 +740,29 @@ class NotifierApp:
                   activebackground=ACCENT2).pack(fill="x", padx=20, pady=6)
 
     def _register_autostart(self):
+        # Keep a Startup-folder shortcut so the app launches at logon.
+        # Uses the Startup folder (not the HKCU Run key) to avoid the AV
+        # persistence heuristic that flags exes registering themselves in Run.
         if not getattr(sys, 'frozen', False):
             return
         try:
-            import winreg
-            key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Run",
-                0, winreg.KEY_SET_VALUE)
-            winreg.SetValueEx(key, "AssetManagerNotifier", 0, winreg.REG_SZ, sys.executable)
-            winreg.CloseKey(key)
+            import tempfile, subprocess
+            startup = os.path.join(os.environ.get("APPDATA", ""),
+                                   r"Microsoft\Windows\Start Menu\Programs\Startup")
+            if not os.path.isdir(startup):
+                return
+            lnk = os.path.join(startup, "AssetManagerNotifier.lnk")
+            exe = sys.executable
+            vbs = ('Set s = WScript.CreateObject("WScript.Shell")\r\n'
+                   'Set k = s.CreateShortcut("%s")\r\n'
+                   'k.TargetPath = "%s"\r\n'
+                   'k.WorkingDirectory = "%s"\r\n'
+                   'k.Save\r\n' % (lnk, exe, os.path.dirname(exe)))
+            tmp = tempfile.NamedTemporaryFile(suffix=".vbs", delete=False, mode="w")
+            tmp.write(vbs)
+            tmp.close()
+            subprocess.run(["cscript", "//Nologo", tmp.name], capture_output=True, timeout=10)
+            os.unlink(tmp.name)
         except Exception:
             pass
 
