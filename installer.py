@@ -381,16 +381,6 @@ class InstallerApp:
             shutil.copy2(exe_src, dst)
             if os.path.exists(_SSL_CERT_PATH):
                 shutil.copy2(_SSL_CERT_PATH, os.path.join(dest_dir, "ssl_cert.pem"))
-            try:
-                import winreg
-                rkey = winreg.OpenKey(
-                    winreg.HKEY_CURRENT_USER,
-                    r"Software\Microsoft\Windows\CurrentVersion\Run",
-                    0, winreg.KEY_SET_VALUE)
-                winreg.SetValueEx(rkey, "AssetManagerNotifier", 0, winreg.REG_SZ, dst)
-                winreg.CloseKey(rkey)
-            except Exception:
-                pass
             cfg = {
                 "server_url":     server_url,
                 "current_user":   member,
@@ -401,6 +391,9 @@ class InstallerApp:
                 json.dump(cfg, f, indent=2)
 
             _create_shortcut(dst, f"Asset Notifier \u2014 {member.split()[0]}")
+            _create_shortcut(dst, "AssetManagerNotifier",
+                             folder=os.path.join(os.environ.get("APPDATA", ""),
+                                                 r"Microsoft\Windows\Start Menu\Programs\Startup"))
 
             messagebox.showinfo(
                 "Installation Complete \u2714",
@@ -526,13 +519,15 @@ class InstallerApp:
 
 # ─── Shortcut helper (Windows VBScript) ──────────────────────────────────────
 
-def _create_shortcut(target_path, name):
-    """Create a Desktop shortcut using a temporary VBScript (Windows only)."""
+def _create_shortcut(target_path, name, folder=None):
+    """Create a .lnk shortcut (Desktop by default) using a temporary VBScript (Windows only)."""
     try:
         import tempfile, subprocess
-        desktop = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")),
-                               "Desktop")
-        lnk     = os.path.join(desktop, f"{name}.lnk")
+        if folder is None:
+            folder = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")),
+                                  "Desktop")
+        os.makedirs(folder, exist_ok=True)
+        lnk     = os.path.join(folder, f"{name}.lnk")
         vbs     = textwrap.dedent(f"""\
             Set WshShell = WScript.CreateObject("WScript.Shell")
             Set oShortcut = WshShell.CreateShortcut("{lnk}")
