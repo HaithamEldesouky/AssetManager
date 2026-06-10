@@ -397,7 +397,7 @@ class InstallerApp:
                 f"\u2705  Notifier installed successfully for  {member}\n\n"
                 f"Location: {dst}\n\n"
                 "A Desktop shortcut has been created.\n"
-                "Launch it from the Desktop shortcut to begin."
+                "The app will start automatically with Windows."
             )
             self.root.destroy()
         except Exception as e:
@@ -516,15 +516,13 @@ class InstallerApp:
 
 # ─── Shortcut helper (Windows VBScript) ──────────────────────────────────────
 
-def _create_shortcut(target_path, name, folder=None):
-    """Create a .lnk shortcut (Desktop by default) using a temporary VBScript (Windows only)."""
+def _create_shortcut(target_path, name):
+    """Create a Desktop shortcut using a temporary VBScript (Windows only)."""
     try:
         import tempfile, subprocess
-        if folder is None:
-            folder = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")),
-                                  "Desktop")
-        os.makedirs(folder, exist_ok=True)
-        lnk     = os.path.join(folder, f"{name}.lnk")
+        desktop = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")),
+                               "Desktop")
+        lnk     = os.path.join(desktop, f"{name}.lnk")
         vbs     = textwrap.dedent(f"""\
             Set WshShell = WScript.CreateObject("WScript.Shell")
             Set oShortcut = WshShell.CreateShortcut("{lnk}")
