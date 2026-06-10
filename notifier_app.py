@@ -36,7 +36,7 @@ TEAM_MEMBERS = [
 DEFAULT_CFG = {
     "server_url":    "https://asset-server:8081",
     "current_user":  "Engineer 1",
-    "poll_interval": 300,
+    "poll_interval": 30,
 }
 
 def load_config():
@@ -229,7 +229,10 @@ class NotificationPopup:
         tk.Label(hdr, text="📦  Asset Manager — Action Required",
                  bg=ACCENT, fg="white",
                  font=("Segoe UI", 9, "bold")).pack(side="left", padx=10, pady=8)
-        # No close button — popup stays until the engineer confirms or rejects.
+        tk.Button(hdr, text="✕", bg=ACCENT, fg="#cce4ff",
+                  relief="flat", font=("Segoe UI", 9), cursor="hand2",
+                  command=self.win.destroy,
+                  activebackground=ACCENT).pack(side="right", padx=6)
 
         body = tk.Frame(inner, bg=BG, padx=14, pady=10)
         body.pack(fill="both", expand=True)
@@ -285,20 +288,19 @@ class NotificationPopup:
                   activebackground="#c62828").pack(side="left")
 
         self.timer_lbl = tk.Label(btn_f,
-                                  text="Awaiting your response",
+                                  text=f"closes in {self.countdown}s",
                                   bg=CARD2, fg=SUBTEXT, font=("Segoe UI", 8))
         self.timer_lbl.pack(side="right")
 
         self._tick()
 
     def _tick(self):
-        # Stay open until the engineer responds; keep the popup on top.
-        try:
-            self.win.attributes("-topmost", True)
-            self.win.lift()
-        except Exception:
-            return
-        self.win.after(2000, self._tick)
+        if self.countdown > 0:
+            self.countdown -= 1
+            self.timer_lbl.config(text=f"closes in {self.countdown}s")
+            self.win.after(1000, self._tick)
+        else:
+            self.win.destroy()
 
     def _confirm(self):
         self.on_confirm(self.trans['id'])
@@ -715,7 +717,7 @@ class NotifierApp:
                     new_cfg = {
                         "server_url":    server,
                         "current_user":  member,
-                        "poll_interval": 300,
+                        "poll_interval": 30,
                         "setup_complete": True,
                     }
                     save_config(new_cfg)
