@@ -636,10 +636,10 @@ class StorekeeperApp:
         self.v_member = ttk.Combobox(frm, values=self._members, state="readonly",
                                      font=("Segoe UI", 10))
         self.v_member.pack(fill="x", ipady=4)
-        tk.Button(frm, text="➕  Add Engineer", bg=CARD2, fg=ACCENT,
-                  font=("Segoe UI", 8, "bold"), relief="flat", cursor="hand2",
+        tk.Button(frm, text="➕  Add New Engineer", bg=ACCENT, fg="white",
+                  font=("Segoe UI", 9, "bold"), relief="flat", cursor="hand2",
                   command=self._add_engineer_dialog,
-                  activebackground=INPUT_BG).pack(anchor="e", pady=(3, 0))
+                  activebackground="#1a4060", pady=4).pack(fill="x", pady=(4, 0))
 
         lbl("Transaction Type", required=True)
         dir_f = tk.Frame(frm, bg=CARD)
@@ -1074,20 +1074,32 @@ class StorekeeperApp:
     def _notify_rejection(self, t):
         aid    = t.get("asset_number") or t.get("serial_number") or "?"
         reason = t.get("rejection_reason") or "(no reason given)"
+        # Force the window forward so the alert can't be missed behind other windows.
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.attributes("-topmost", True)
+            self.root.after(1500, lambda: self.root.attributes("-topmost", False))
+        except Exception:
+            pass
         messagebox.showwarning("Transaction Rejected",
             f"{t.get('team_member', '?')} rejected a transaction.\n\n"
             f"Asset: {aid}\n"
             f"Type: {t.get('asset_type', '')}\n"
             f"Direction: {t.get('direction', '')}\n\n"
-            f"Reason: {reason}")
+            f"Reason: {reason}",
+            parent=self.root)
 
     def _tick_background(self):
+        # Refresh the history table (so confirm/reject status reflects without a
+        # manual refresh), flush the offline buffer, and check for new rejections.
         try:
+            self._refresh_transactions()
             self._flush_buffer()
             self._poll_rejections()
         except Exception:
             pass
-        self.root.after(60000, self._tick_background)
+        self.root.after(15000, self._tick_background)
 
     # ── Asset Lookup (auto-fill) ──────────────────────────────────────────────
 

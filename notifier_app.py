@@ -36,7 +36,7 @@ TEAM_MEMBERS = [
 DEFAULT_CFG = {
     "server_url":    "https://asset-server:8081",
     "current_user":  "Engineer 1",
-    "poll_interval": 300,
+    "poll_interval": 15,
 }
 
 def load_config():
@@ -517,14 +517,14 @@ class SettingsWindow:
         lbl("Poll Interval (seconds)")
         poll_e = tk.Entry(frm, bg=INPUT_BG, fg=TEXT, relief="flat",
                           font=("Segoe UI", 10), insertbackground=TEXT)
-        poll_e.insert(0, str(cfg.get("poll_interval", 30)))
+        poll_e.insert(0, str(cfg.get("poll_interval", 15)))
         poll_e.pack(fill="x", ipady=8)
 
         def save():
             new = {
                 "server_url":    url_e.get().strip().rstrip("/"),
                 "current_user":  member_cb.get(),
-                "poll_interval": int(poll_e.get().strip() or 30),
+                "poll_interval": int(poll_e.get().strip() or 15),
             }
             save_config(new)
             on_save(new)
@@ -544,7 +544,7 @@ class NotifierApp:
         self.cfg          = load_config()
         self.server_url   = self.cfg["server_url"]
         self.current_user = self.cfg["current_user"]
-        self.poll_secs    = int(self.cfg.get("poll_interval", 30))
+        self.poll_secs    = int(self.cfg.get("poll_interval", 15))
         self.notified_ids = set()
         self.running      = True
         self.tray_icon    = None
@@ -629,7 +629,7 @@ class NotifierApp:
         self.cfg          = new_cfg
         self.server_url   = new_cfg["server_url"]
         self.current_user = new_cfg["current_user"]
-        self.poll_secs    = int(new_cfg.get("poll_interval", 30))
+        self.poll_secs    = int(new_cfg.get("poll_interval", 15))
         self.notified_ids.clear()
         if self.tray_icon:
             self.tray_icon.title = f"Asset Notifier  —  {self.current_user}"
@@ -715,7 +715,7 @@ class NotifierApp:
                     new_cfg = {
                         "server_url":    server,
                         "current_user":  member,
-                        "poll_interval": 300,
+                        "poll_interval": 15,
                         "setup_complete": True,
                     }
                     save_config(new_cfg)
