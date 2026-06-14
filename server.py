@@ -172,10 +172,16 @@ _ARCHIVE_COLS = ["id", "asset_type", "serial_number", "asset_number", "asset_mod
                  "team_member", "direction", "timestamp", "confirmed", "rejected",
                  "confirmed_at", "rejection_reason", "notes", "storekeeper"]
 
-def _export_records_xlsx(path):
+def _export_records_xlsx(path, ids=None):
     import openpyxl
     conn = get_db()
-    rows = conn.execute(f"SELECT {','.join(_ARCHIVE_COLS)} FROM transactions ORDER BY id").fetchall()
+    if ids:
+        qmarks = ",".join("?" * len(ids))
+        rows = conn.execute(
+            f"SELECT {','.join(_ARCHIVE_COLS)} FROM transactions "
+            f"WHERE id IN ({qmarks}) ORDER BY id", list(ids)).fetchall()
+    else:
+        rows = conn.execute(f"SELECT {','.join(_ARCHIVE_COLS)} FROM transactions ORDER BY id").fetchall()
     conn.close()
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -873,102 +879,6 @@ def run_gui():
               command=change_host_port,
               activebackground="#1a4060").pack(fill="x", padx=18, pady=(0, 4))
 
-    # ─── Clear All Records ────────────────────────────────────────────────
-    def clear_all_records():
-        import tkinter.messagebox as mb
-        dlg = tk.Toplevel(root)
-        dlg.title("Clear All Records")
-        dlg.geometry("400x380")
-        dlg.configure(bg="#1e2a3a")
-        dlg.resizable(False, False)
-        dlg.grab_set()
-        dlg.transient(root)
-
-        hdr = tk.Frame(dlg, bg="#c0392b", height=44)
-        hdr.pack(fill="x")
-        hdr.pack_propagate(False)
-        tk.Label(hdr, text="🗑  Clear All Records",
-                 bg="#c0392b", fg="white",
-                 font=("Segoe UI", 11, "bold")).pack(side="left", padx=14, pady=12)
-
-        frm = tk.Frame(dlg, bg="#243447", padx=20, pady=14)
-        frm.pack(fill="x", padx=18, pady=14)
-
-        tk.Label(frm, text="⚠  This will permanently delete ALL transaction records.",
-                 bg="#243447", fg="#f0a500", font=("Segoe UI", 9),
-                 wraplength=320).pack(anchor="w", pady=(0, 10))
-
-        tk.Label(frm, text="Admin Password", bg="#243447", fg="#8a9bb0",
-                 font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 2))
-        pw_e = tk.Entry(frm, show="●", bg="#2a3f55", fg="#ffffff",
-                        relief="flat", font=("Segoe UI", 10),
-                        insertbackground="#ffffff")
-        pw_e.pack(fill="x", ipady=7)
-
-        archive_var = tk.IntVar(value=1)
-        tk.Checkbutton(frm, text="Export all records to an archive file first",
-                       variable=archive_var, bg="#243447", fg="#e8edf2",
-                       selectcolor="#2a3f55", activebackground="#243447",
-                       activeforeground="#e8edf2", font=("Segoe UI", 9)).pack(anchor="w", pady=(10, 0))
-
-        err_lbl = tk.Label(dlg, text="", bg="#1e2a3a", fg="#f44336",
-                           font=("Segoe UI", 9))
-        err_lbl.pack(pady=(2, 0))
-
-        def do_clear():
-            import tkinter.filedialog as fd
-            pw = pw_e.get()
-            if not pw:
-                err_lbl.config(text="✗  Password is required.")
-                return
-            if sha256(pw) != ADMIN_CFG['password_hash']:
-                err_lbl.config(text="✗  Incorrect password.")
-                return
-            if archive_var.get():
-                default_name = "AssetManager_Archive_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx"
-                save_path = fd.asksaveasfilename(
-                    parent=dlg, title="Save records archive",
-                    defaultextension=".xlsx", initialfile=default_name,
-                    filetypes=[("Excel archive", "*.xlsx")])
-                if not save_path:
-                    err_lbl.config(text="✗  Archive cancelled — nothing deleted.")
-                    return
-                try:
-                    cnt = _export_records_xlsx(save_path)
-                except Exception as ex:
-                    err_lbl.config(text=f"✗  Archive failed: {ex}")
-                    return
-            if not mb.askyesno("Confirm Delete",
-                               "Are you sure?\n\nThis will delete ALL transaction records permanently.\nThis cannot be undone.",
-                               icon="warning"):
-                return
-            try:
-                conn = sqlite3.connect(DB_PATH)
-                conn.execute("DELETE FROM transactions")
-                conn.commit()
-                conn.close()
-                dlg.destroy()
-                msg = "✓  All records have been deleted."
-                if archive_var.get():
-                    msg += f"\n\nArchived {cnt} record(s) to:\n{save_path}"
-                mb.showinfo("Done", msg)
-            except Exception as ex:
-                err_lbl.config(text=f"✗  Error: {ex}")
-
-        tk.Button(dlg, text="🗑  Delete All Records",
-                  bg="#c0392b", fg="white", font=("Segoe UI", 10, "bold"),
-                  relief="flat", cursor="hand2", pady=9,
-                  command=do_clear,
-                  activebackground="#922b21").pack(fill="x", padx=18, pady=(4, 12))
-        pw_e.focus_set()
-
-    tk.Button(root, text="🗑  Clear All Records",
-              bg="#922b21", fg="white",
-              font=("Segoe UI", 9, "bold"),
-              relief="flat", cursor="hand2", pady=8,
-              command=clear_all_records,
-              activebackground="#7b241c").pack(fill="x", padx=18, pady=(0, 4))
-
     def import_archive():
         import tkinter.messagebox as mb
         import tkinter.filedialog as fd
@@ -995,15 +905,16 @@ def run_gui():
               relief="flat", cursor="hand2", pady=8,
               command=import_archive, activebackground="#1a4060").pack(fill="x", padx=18, pady=(0, 4))
 
+    # ─── Manage / Delete Records (with archive-on-delete) ─────────────────────
     def manage_records():
         import tkinter.messagebox as mb
         from tkinter import ttk
         win = tk.Toplevel(root)
         win.title("Manage Records")
-        win.geometry("760x460")
+        win.geometry("780x500")
         win.configure(bg="#1e2a3a")
         win.transient(root)
-        tk.Label(win, text="Manage Records  —  select one or more rows to delete",
+        tk.Label(win, text="🗂  Manage Records  —  select rows (or Select All), then Delete",
                  bg="#1e2a3a", fg="#e8edf2", font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=14, pady=(12, 6))
         cols = ("id", "asset_number", "serial_number", "type", "member", "direction", "status", "date")
         tree = ttk.Treeview(win, columns=cols, show="headings", selectmode="extended", height=15)
@@ -1026,34 +937,104 @@ def run_gui():
                 tree.insert("", "end", values=(r["id"], r["asset_number"], r["serial_number"],
                             r["asset_type"], r["team_member"], r["direction"], status, ds))
         load_rows()
+
+        def select_all():
+            tree.selection_set(tree.get_children())
+
+        def _confirm_and_delete(ids, all_selected):
+            """Password + optional archive, then delete the given ids. Used for any
+            count — a subset or every row — so the export option is always offered."""
+            import tkinter.filedialog as fd
+            dlg = tk.Toplevel(win)
+            dlg.title("Delete Records")
+            dlg.geometry("420x300")
+            dlg.configure(bg="#1e2a3a")
+            dlg.resizable(False, False)
+            dlg.grab_set()
+            dlg.transient(win)
+            hdr = tk.Frame(dlg, bg="#c0392b", height=44)
+            hdr.pack(fill="x"); hdr.pack_propagate(False)
+            scope = "ALL records" if all_selected else f"{len(ids)} selected record(s)"
+            tk.Label(hdr, text="🗑  Delete Records", bg="#c0392b", fg="white",
+                     font=("Segoe UI", 11, "bold")).pack(side="left", padx=14, pady=12)
+            frm = tk.Frame(dlg, bg="#243447", padx=20, pady=14)
+            frm.pack(fill="x", padx=18, pady=14)
+            tk.Label(frm, text=f"⚠  This will permanently delete {scope}.",
+                     bg="#243447", fg="#f0a500", font=("Segoe UI", 9),
+                     wraplength=340).pack(anchor="w", pady=(0, 10))
+            tk.Label(frm, text="Admin Password", bg="#243447", fg="#8a9bb0",
+                     font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 2))
+            pw_e = tk.Entry(frm, show="●", bg="#2a3f55", fg="#ffffff", relief="flat",
+                            font=("Segoe UI", 10), insertbackground="#ffffff")
+            pw_e.pack(fill="x", ipady=7)
+            archive_var = tk.IntVar(value=1)
+            tk.Checkbutton(frm, text="Export these records to an archive file first",
+                           variable=archive_var, bg="#243447", fg="#e8edf2",
+                           selectcolor="#2a3f55", activebackground="#243447",
+                           activeforeground="#e8edf2", font=("Segoe UI", 9)).pack(anchor="w", pady=(10, 0))
+            err_lbl = tk.Label(dlg, text="", bg="#1e2a3a", fg="#f44336", font=("Segoe UI", 9))
+            err_lbl.pack(pady=(2, 0))
+            def do_delete():
+                pw = pw_e.get()
+                if not pw:
+                    err_lbl.config(text="✗  Password is required."); return
+                if sha256(pw) != ADMIN_CFG['password_hash']:
+                    err_lbl.config(text="✗  Incorrect password."); return
+                save_path = None
+                if archive_var.get():
+                    default_name = "AssetManager_Archive_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx"
+                    save_path = fd.asksaveasfilename(
+                        parent=dlg, title="Save records archive",
+                        defaultextension=".xlsx", initialfile=default_name,
+                        filetypes=[("Excel archive", "*.xlsx")])
+                    if not save_path:
+                        err_lbl.config(text="✗  Archive cancelled — nothing deleted."); return
+                    try:
+                        _export_records_xlsx(save_path, ids=ids)
+                    except Exception as ex:
+                        err_lbl.config(text=f"✗  Archive failed: {ex}"); return
+                if not mb.askyesno("Confirm Delete",
+                                   f"Delete {scope} permanently?\nThis cannot be undone.",
+                                   icon="warning", parent=dlg):
+                    return
+                try:
+                    conn = get_db()
+                    qmarks = ",".join("?" * len(ids))
+                    conn.execute(f"DELETE FROM transactions WHERE id IN ({qmarks})", ids)
+                    conn.commit(); conn.close()
+                    dlg.destroy()
+                    load_rows()
+                    msg = f"✓  Deleted {len(ids)} record(s)."
+                    if save_path:
+                        msg += f"\n\nArchived to:\n{save_path}"
+                    mb.showinfo("Done", msg)
+                except Exception as ex:
+                    err_lbl.config(text=f"✗  Error: {ex}")
+            tk.Button(dlg, text="🗑  Delete", bg="#c0392b", fg="white",
+                      font=("Segoe UI", 10, "bold"), relief="flat", cursor="hand2", pady=9,
+                      command=do_delete, activebackground="#922b21").pack(fill="x", padx=18, pady=(4, 12))
+            pw_e.focus_set()
+
         def delete_selected():
             sel = tree.selection()
             if not sel:
-                mb.showinfo("Manage Records", "Select one or more rows first.")
+                mb.showinfo("Manage Records", "Select one or more rows first (or use Select All).")
                 return
+            all_rows = tree.get_children()
             ids = [int(tree.item(s)["values"][0]) for s in sel]
-            pw = simple_password_prompt(win, "Delete Records",
-                                        f"Delete {len(ids)} selected record(s)? This cannot be undone.")
-            if pw is None:
-                return
-            if sha256(pw) != ADMIN_CFG['password_hash']:
-                mb.showerror("Delete Records", "Incorrect admin password.")
-                return
-            conn = get_db()
-            qmarks = ",".join("?" * len(ids))
-            conn.execute(f"DELETE FROM transactions WHERE id IN ({qmarks})", ids)
-            conn.commit()
-            conn.close()
-            load_rows()
-            mb.showinfo("Delete Records", f"Deleted {len(ids)} record(s).")
+            _confirm_and_delete(ids, all_selected=(len(sel) == len(all_rows) and len(all_rows) > 0))
+
         btnf = tk.Frame(win, bg="#1e2a3a")
         btnf.pack(fill="x", padx=14, pady=(4, 12))
         tk.Button(btnf, text="🗑  Delete Selected", bg="#c0392b", fg="white",
                   font=("Segoe UI", 9, "bold"), relief="flat", cursor="hand2", pady=7,
                   command=delete_selected, activebackground="#922b21").pack(side="left")
+        tk.Button(btnf, text="☑  Select All", bg="#2a5e8a", fg="white",
+                  font=("Segoe UI", 9, "bold"), relief="flat", cursor="hand2", pady=7,
+                  command=select_all, activebackground="#1a4060").pack(side="left", padx=8)
         tk.Button(btnf, text="↻  Refresh", bg="#2a5e8a", fg="white",
                   font=("Segoe UI", 9, "bold"), relief="flat", cursor="hand2", pady=7,
-                  command=load_rows, activebackground="#1a4060").pack(side="left", padx=8)
+                  command=load_rows, activebackground="#1a4060").pack(side="left")
 
     tk.Button(root, text="🗂  Manage / Delete Records",
               bg="#2a5e8a", fg="white", font=("Segoe UI", 9, "bold"),
