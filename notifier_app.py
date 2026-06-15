@@ -6,9 +6,11 @@ Settings protected by admin password (verified against server).
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-import threading, time, requests, json, os, sys, ssl
+import threading, time, requests, json, os, sys, ssl, webbrowser
 from requests.adapters import HTTPAdapter
 from datetime import datetime
+
+APP_VERSION = "1.5.0"   # compared against the server's /version to offer updates
 
 try:
     import pystray
@@ -89,6 +91,41 @@ def api(method, url, **kw):
                 return getattr(requests, method)(url.replace("https://", "http://", 1), **kw)
             raise
     return getattr(requests, method)(url, **kw)
+
+def fetch_members(server_url):
+    """Return the engineer list from the server's /members (names only).
+    Falls back to the baked-in TEAM_MEMBERS if the server is unreachable."""
+    try:
+        r = api("get", f"{server_url.rstrip('/')}/members", timeout=5)
+        if r.ok:
+            names = [m["name"] for m in r.json() if m.get("name")]
+            if names:
+                return names
+    except Exception:
+        pass
+    return list(TEAM_MEMBERS)
+
+def _ver_tuple(s):
+    try:
+        return tuple(int(x) for x in str(s).strip().split("."))
+    except Exception:
+        return (0,)
+
+def check_for_update(server_url):
+    """Return (latest, download_url) if the server advertises a newer version than
+    APP_VERSION, else None."""
+    try:
+        r = api("get", f"{server_url.rstrip('/')}/version", timeout=5)
+        if r.ok:
+            data = r.json()
+            latest = data.get("latest", "")
+            if latest and _ver_tuple(latest) > _ver_tuple(APP_VERSION):
+                dl = data.get("download_path", "")
+                url = f"{server_url.rstrip('/')}{dl}" if dl else ""
+                return (latest, url)
+    except Exception:
+        pass
+    return None
 
 # ─── Colours ──────────────────────────────────────────────────────────────────
 
@@ -510,9 +547,17 @@ class SettingsWindow:
         url_e.pack(fill="x", ipady=8)
 
         lbl("Assigned User  (this device belongs to)")
-        member_cb = ttk.Combobox(frm, values=TEAM_MEMBERS, font=("Segoe UI", 10))
+        member_row = tk.Frame(frm, bg=CARD2)
+        member_row.pack(fill="x")
+        member_cb = ttk.Combobox(member_row, values=fetch_members(cfg.get("server_url", "")),
+                                 font=("Segoe UI", 10))
         member_cb.set(cfg.get("current_user", "Engineer 1"))
-        member_cb.pack(fill="x", ipady=4)
+        member_cb.pack(side="left", fill="x", expand=True, ipady=4)
+        def _reload_members():
+            member_cb["values"] = fetch_members(url_e.get().strip())
+        tk.Button(member_row, text="↻", bg=ACCENT, fg="white", relief="flat",
+                  cursor="hand2", font=("Segoe UI", 10, "bold"), width=3,
+                  command=_reload_members).pack(side="left", padx=(6, 0))
 
         lbl("Poll Interval (seconds)")
         poll_e = tk.Entry(frm, bg=INPUT_BG, fg=TEXT, relief="flat",
@@ -554,6 +599,28 @@ class NotifierApp:
         self.root.title("Asset Notifier")
 
         threading.Thread(target=self._poll_loop, daemon=True).start()
+        threading.Thread(target=self._check_update, daemon=True).start()
+
+    def _check_update(self):
+        res = check_for_update(self.server_url)
+        if res:
+            latest, url = res
+            self.root.after(0, lambda: self._prompt_update(latest, url))
+
+    def _prompt_update(self, latest, url):
+        msg = (f"A newer version of Asset Notifier is available "
+               f"(v{latest} — you have v{APP_VERSION}).\n\n")
+        if url:
+            if messagebox.askyesno("Update Available",
+                                   msg + "Open the download now? After it downloads, "
+                                         "run AssetManager_Setup.exe to update."):
+                try:
+                    webbrowser.open(url)
+                except Exception:
+                    pass
+        else:
+            messagebox.showinfo("Update Available",
+                                msg + "Please contact your admin to update.")
 
     def _poll_loop(self):
         self._poll_once()
@@ -686,10 +753,21 @@ class NotifierApp:
         url_e.pack(fill="x", ipady=8)
 
         lbl("Assign this PC to")
-        member_cb = ttk.Combobox(frm, values=TEAM_MEMBERS,
+        member_row = tk.Frame(frm, bg=CARD2)
+        member_row.pack(fill="x")
+        _initial = fetch_members(url_e.get().strip())
+        member_cb = ttk.Combobox(member_row, values=_initial,
                                  state="readonly", font=("Segoe UI", 10))
-        member_cb.set(TEAM_MEMBERS[0])
-        member_cb.pack(fill="x", ipady=4)
+        member_cb.set(_initial[0])
+        member_cb.pack(side="left", fill="x", expand=True, ipady=4)
+        def _reload_members():
+            vals = fetch_members(url_e.get().strip())
+            member_cb["values"] = vals
+            if member_cb.get() not in vals:
+                member_cb.set(vals[0])
+        tk.Button(member_row, text="↻", bg=ACCENT, fg="white", relief="flat",
+                  cursor="hand2", font=("Segoe UI", 10, "bold"), width=3,
+                  command=_reload_members).pack(side="left", padx=(6, 0))
 
         lbl("Admin Password")
         pw_e = tk.Entry(frm, show="●", bg=INPUT_BG, fg=TEXT, relief="flat",

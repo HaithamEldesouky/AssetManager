@@ -26,6 +26,7 @@ TEAM_MEMBERS = [
 ]
 
 DEFAULT_SERVER_URL = "https://asset-server:8081"
+APP_VERSION = "1.5.0"
 
 
 # ─── Colours ──────────────────────────────────────────────────────────────────
@@ -88,6 +89,19 @@ def api(method, url, **kw):
                 return getattr(requests, method)(url.replace("https://", "http://", 1), **kw)
             raise
     return getattr(requests, method)(url, **kw)
+
+def fetch_members(server_url):
+    """Engineer names from the server's /members, so newly-added engineers are
+    selectable without rebuilding. Falls back to the baked-in list if unreachable."""
+    try:
+        r = api("get", f"{server_url.rstrip('/')}/members", timeout=5)
+        if r.ok:
+            names = [m["name"] for m in r.json() if m.get("name")]
+            if names:
+                return names
+    except Exception:
+        pass
+    return list(TEAM_MEMBERS)
 
 def _bundled_path(name):
     """Return path to a bundled exe.
@@ -276,10 +290,24 @@ class InstallerApp:
             self._build_url_field(self.dynamic)
             tk.Label(self.dynamic, text="Assign this PC to:",
                      bg=BG, fg=SUBTEXT, font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 2))
-            self.v_member = ttk.Combobox(self.dynamic, values=TEAM_MEMBERS,
+            member_row = tk.Frame(self.dynamic, bg=BG)
+            member_row.pack(fill="x")
+            _initial = fetch_members(self.v_url.get().strip())
+            self.v_member = ttk.Combobox(member_row, values=_initial,
                                           state="readonly", font=("Segoe UI", 10))
-            self.v_member.set(TEAM_MEMBERS[0])
-            self.v_member.pack(fill="x", ipady=4)
+            self.v_member.set(_initial[0])
+            self.v_member.pack(side="left", fill="x", expand=True, ipady=4)
+            def _reload_members():
+                vals = fetch_members(self.v_url.get().strip())
+                self.v_member["values"] = vals
+                if self.v_member.get() not in vals:
+                    self.v_member.set(vals[0])
+            tk.Button(member_row, text="↻", bg=ACCENT, fg="white", relief="flat",
+                      cursor="hand2", font=("Segoe UI", 10, "bold"), width=3,
+                      command=_reload_members).pack(side="left", padx=(6, 0))
+            tk.Label(self.dynamic,
+                     text="↻ loads the latest engineer list from the server.",
+                     bg=BG, fg=SUBTEXT, font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
 
             tk.Label(self.dynamic,
                      text="Admin Password  (verified against server — required):",
@@ -384,7 +412,7 @@ class InstallerApp:
             cfg = {
                 "server_url":     server_url,
                 "current_user":   member,
-                "poll_interval":  30,
+                "poll_interval":  15,
                 "setup_complete": True,
             }
             with open(os.path.join(dest_dir, "config.json"), "w") as f:
