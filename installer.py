@@ -26,7 +26,6 @@ TEAM_MEMBERS = [
 ]
 
 DEFAULT_SERVER_URL = "https://asset-server:8081"
-APP_VERSION = "1.5.0"
 
 
 # ─── Colours ──────────────────────────────────────────────────────────────────

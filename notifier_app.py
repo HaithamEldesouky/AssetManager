@@ -6,11 +6,9 @@ Settings protected by admin password (verified against server).
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-import threading, time, requests, json, os, sys, ssl, webbrowser
+import threading, time, requests, json, os, sys, ssl
 from requests.adapters import HTTPAdapter
 from datetime import datetime
-
-APP_VERSION = "1.5.0"   # compared against the server's /version to offer updates
 
 try:
     import pystray
@@ -104,28 +102,6 @@ def fetch_members(server_url):
     except Exception:
         pass
     return list(TEAM_MEMBERS)
-
-def _ver_tuple(s):
-    try:
-        return tuple(int(x) for x in str(s).strip().split("."))
-    except Exception:
-        return (0,)
-
-def check_for_update(server_url):
-    """Return (latest, download_url) if the server advertises a newer version than
-    APP_VERSION, else None."""
-    try:
-        r = api("get", f"{server_url.rstrip('/')}/version", timeout=5)
-        if r.ok:
-            data = r.json()
-            latest = data.get("latest", "")
-            if latest and _ver_tuple(latest) > _ver_tuple(APP_VERSION):
-                dl = data.get("download_path", "")
-                url = f"{server_url.rstrip('/')}{dl}" if dl else ""
-                return (latest, url)
-    except Exception:
-        pass
-    return None
 
 # ─── Colours ──────────────────────────────────────────────────────────────────
 
@@ -599,28 +575,6 @@ class NotifierApp:
         self.root.title("Asset Notifier")
 
         threading.Thread(target=self._poll_loop, daemon=True).start()
-        threading.Thread(target=self._check_update, daemon=True).start()
-
-    def _check_update(self):
-        res = check_for_update(self.server_url)
-        if res:
-            latest, url = res
-            self.root.after(0, lambda: self._prompt_update(latest, url))
-
-    def _prompt_update(self, latest, url):
-        msg = (f"A newer version of Asset Notifier is available "
-               f"(v{latest} — you have v{APP_VERSION}).\n\n")
-        if url:
-            if messagebox.askyesno("Update Available",
-                                   msg + "Open the download now? After it downloads, "
-                                         "run AssetManager_Setup.exe to update."):
-                try:
-                    webbrowser.open(url)
-                except Exception:
-                    pass
-        else:
-            messagebox.showinfo("Update Available",
-                                msg + "Please contact your admin to update.")
 
     def _poll_loop(self):
         self._poll_once()

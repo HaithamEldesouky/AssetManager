@@ -36,8 +36,6 @@ def _make_server_tray_icon():
     d.ellipse([42, 44, 58, 60], fill=(76, 175, 80))  # green dot = running
     return img
 
-APP_VERSION = "1.5.0"   # bump when releasing a new build; clients compare against this
-
 app = Flask(__name__)
 CORS(app)
 
@@ -286,28 +284,6 @@ def health():
     count = conn.execute('SELECT COUNT(*) FROM transactions').fetchone()[0]
     conn.close()
     return jsonify({"status": "ok", "timestamp": datetime.now().isoformat(), "total": count})
-
-@app.route('/version')
-def get_version():
-    """Latest published version + download link (if the installer is present next to
-    AssetServer.exe). Clients compare this against their own APP_VERSION and prompt
-    the user to update when behind. Drop a new AssetManager_Setup.exe beside the
-    server exe and bump APP_VERSION to push an update."""
-    installer = os.path.join(BASE_DIR, "AssetManager_Setup.exe")
-    has_installer = os.path.exists(installer)
-    return jsonify({
-        "latest": APP_VERSION,
-        "has_installer": has_installer,
-        "download_path": "/download/installer" if has_installer else "",
-    })
-
-@app.route('/download/installer')
-def download_installer():
-    installer = os.path.join(BASE_DIR, "AssetManager_Setup.exe")
-    if not os.path.exists(installer):
-        return jsonify({"error": "installer not available"}), 404
-    return send_file(installer, as_attachment=True,
-                     download_name="AssetManager_Setup.exe")
 
 @app.route('/transactions', methods=['GET'])
 def get_transactions():
