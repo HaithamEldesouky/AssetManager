@@ -5,9 +5,11 @@ For: Storekeeper User
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-import requests, json, os, sys, threading, ssl
+import requests, json, os, sys, threading, ssl, webbrowser
 from requests.adapters import HTTPAdapter
 from datetime import datetime, date
+
+APP_VERSION = "1.5.0"   # compared against the server's /version to offer updates
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -100,6 +102,12 @@ def api(method, url, **kw):
                 return getattr(requests, method)(url.replace("https://", "http://", 1), **kw)
             raise
     return getattr(requests, method)(url, **kw)
+
+def _ver_tuple(s):
+    try:
+        return tuple(int(x) for x in str(s).strip().split("."))
+    except Exception:
+        return (0,)
 
 # ─── Date Range Export Dialog ─────────────────────────────────────────────────
 
@@ -506,6 +514,40 @@ class StorekeeperApp:
         self._load_members()
         self._init_seen_rejected()
         self.root.after(3000, self._tick_background)
+        threading.Thread(target=self._check_update, daemon=True).start()
+
+    def _check_update(self):
+        """Check the server's /version; if a newer build is published, offer to
+        download the installer (user runs it). Defender-safe: only a version GET
+        runs automatically; the exe is downloaded via the browser on user action."""
+        try:
+            r = api("get", f"{self.server_url}/version", timeout=5)
+            if not r.ok:
+                return
+            data   = r.json()
+            latest = data.get("latest", "")
+            if not latest or _ver_tuple(latest) <= _ver_tuple(APP_VERSION):
+                return
+            dl  = data.get("download_path", "")
+            url = f"{self.server_url}{dl}" if dl else ""
+            self.root.after(0, lambda: self._prompt_update(latest, url))
+        except Exception:
+            pass
+
+    def _prompt_update(self, latest, url):
+        msg = (f"A newer version of the Storekeeper app is available "
+               f"(v{latest} — you have v{APP_VERSION}).\n\n")
+        if url:
+            if messagebox.askyesno("Update Available",
+                                   msg + "Open the download now? After it downloads, "
+                                         "run AssetManager_Setup.exe to update."):
+                try:
+                    webbrowser.open(url)
+                except Exception:
+                    pass
+        else:
+            messagebox.showinfo("Update Available",
+                                msg + "Please contact your admin to update.")
 
     def _setup_styles(self):
         s = ttk.Style()
