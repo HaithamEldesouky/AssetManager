@@ -636,10 +636,16 @@ class StorekeeperApp:
         self.v_member = ttk.Combobox(frm, values=self._members, state="readonly",
                                      font=("Segoe UI", 10))
         self.v_member.pack(fill="x", ipady=4)
-        tk.Button(frm, text="➕  Add New Engineer", bg=ACCENT, fg="white",
+        eng_btns = tk.Frame(frm, bg=CARD)
+        eng_btns.pack(fill="x", pady=(4, 0))
+        tk.Button(eng_btns, text="➕  Add New Engineer", bg=ACCENT, fg="white",
                   font=("Segoe UI", 9, "bold"), relief="flat", cursor="hand2",
                   command=self._add_engineer_dialog,
-                  activebackground="#1a4060", pady=4).pack(fill="x", pady=(4, 0))
+                  activebackground="#1a4060", pady=4).pack(side="left", fill="x", expand=True, padx=(0, 3))
+        tk.Button(eng_btns, text="🗑  Delete Engineer", bg="#c0392b", fg="white",
+                  font=("Segoe UI", 9, "bold"), relief="flat", cursor="hand2",
+                  command=self._delete_engineer_dialog,
+                  activebackground="#922b21", pady=4).pack(side="left", fill="x", expand=True, padx=(3, 0))
 
         lbl("Transaction Type", required=True)
         dir_f = tk.Frame(frm, bg=CARD)
@@ -973,6 +979,65 @@ class StorekeeperApp:
         tk.Button(dlg, text="Add Engineer", bg=ACCENT, fg="white", font=("Segoe UI", 10, "bold"),
                   relief="flat", cursor="hand2", pady=9, command=do_add, activebackground=ACCENT2).pack(fill="x", padx=14, pady=(0, 12))
         name_e.focus_set()
+
+    def _delete_engineer_dialog(self):
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Delete Engineer")
+        dlg.configure(bg=BG)
+        dlg.geometry("370x300")
+        dlg.grab_set()
+        dlg.transient(self.root)
+        tk.Label(dlg, text="🗑  Delete Engineer", bg="#c0392b", fg="white",
+                 font=("Segoe UI", 11, "bold")).pack(fill="x", ipady=10)
+        frm = tk.Frame(dlg, bg=CARD2, padx=18, pady=12)
+        frm.pack(fill="both", expand=True, padx=14, pady=12)
+
+        tk.Label(frm, text="Engineer", bg=CARD2, fg=SUBTEXT,
+                 font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 2))
+        member_cb = ttk.Combobox(frm, values=self._members, state="readonly",
+                                 font=("Segoe UI", 10))
+        if self._members:
+            member_cb.set(self._members[0])
+        member_cb.pack(fill="x", ipady=4)
+        tk.Label(frm, text="Removes the engineer from the assignee list. Existing history is kept.",
+                 bg=CARD2, fg=SUBTEXT, font=("Segoe UI", 8),
+                 wraplength=300, justify="left").pack(anchor="w", pady=(6, 0))
+        tk.Label(frm, text="Admin Password", bg=CARD2, fg=SUBTEXT,
+                 font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 2))
+        pw_e = tk.Entry(frm, show="●", bg=INPUT_BG, fg=TEXT, relief="flat",
+                        font=("Segoe UI", 10), insertbackground=TEXT)
+        pw_e.pack(fill="x", ipady=6)
+        err = tk.Label(dlg, text="", bg=BG, fg=DANGER, font=("Segoe UI", 9))
+        err.pack()
+
+        def do_delete():
+            nm = member_cb.get().strip()
+            pw = pw_e.get()
+            if not nm:
+                err.config(text="Select an engineer."); return
+            if not pw:
+                err.config(text="Enter the admin password."); return
+            if not messagebox.askyesno("Delete Engineer",
+                                       f"Remove {nm} from the assignee list?", parent=dlg):
+                return
+            try:
+                r = api("post", f"{self.server_url}/members/delete",
+                        json={"password": pw, "name": nm}, timeout=6)
+                if r.status_code == 401:
+                    err.config(text="Wrong admin password."); return
+                if r.ok:
+                    self._load_members()
+                    dlg.destroy()
+                    messagebox.showinfo("Engineer Deleted",
+                                        f"{nm} removed from the assignee list.")
+                else:
+                    err.config(text=str(r.json().get("error", r.status_code)))
+            except Exception as e:
+                err.config(text=str(e))
+
+        tk.Button(dlg, text="Delete Engineer", bg="#c0392b", fg="white",
+                  font=("Segoe UI", 10, "bold"), relief="flat", cursor="hand2",
+                  pady=9, command=do_delete, activebackground="#922b21").pack(fill="x", padx=14, pady=(0, 12))
 
     def _buffer_load(self):
         try:
