@@ -1533,7 +1533,7 @@ class StorekeeperApp:
             except: pass
 
             direc  = "🔴 Out" if t['direction'] == "Out Store" else "🟢 In"
-            fname  = t['team_member'].split()[0]
+            member = t.get('team_member', '')
             reason = t.get('rejection_reason', '') or ''
 
             self.tree.insert("", "end", values=(
@@ -1541,7 +1541,7 @@ class StorekeeperApp:
                 t.get('serial_number', ''),
                 t.get('asset_model',   ''),
                 t.get('asset_type',    ''),
-                fname, direc, status, reason, ts
+                member, direc, status, reason, ts
             ), tags=(tag,))
 
         count = len(rows)
