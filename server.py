@@ -431,6 +431,22 @@ def add_member():
     conn.close()
     return jsonify({"status": "ok", "name": name, "auto_approve": bool(auto)})
 
+@app.route('/members/delete', methods=['POST'])
+def delete_member():
+    """Admin-only: remove an engineer from the assignee list. Existing transaction
+    history is unaffected (team_member is stored as text on each record)."""
+    data = request.json or {}
+    if sha256(data.get('password', '')) != ADMIN_CFG['password_hash']:
+        return jsonify({"error": "Wrong admin password"}), 401
+    name = (data.get('name', '') or '').strip()
+    if not name:
+        return jsonify({"error": "Name required"}), 400
+    conn = get_db()
+    cur = conn.execute("DELETE FROM team_members WHERE name=?", (name,))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok", "deleted": cur.rowcount, "name": name})
+
 @app.route('/transactions/delete', methods=['POST'])
 def delete_transactions():
     data = request.json or {}
