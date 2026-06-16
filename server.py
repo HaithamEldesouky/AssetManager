@@ -917,11 +917,31 @@ def run_gui():
         tk.Label(win, text="🗂  Manage Records  —  select rows (or Select All), then Delete",
                  bg="#1e2a3a", fg="#e8edf2", font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=14, pady=(12, 6))
         cols = ("id", "asset_number", "serial_number", "type", "member", "direction", "status", "date")
+        headers = {cc: cc.replace("_", " ").title() for cc in cols}
         tree = ttk.Treeview(win, columns=cols, show="headings", selectmode="extended", height=15)
         widths = {"id": 45, "asset_number": 95, "serial_number": 95, "type": 80,
                   "member": 130, "direction": 75, "status": 80, "date": 120}
+        sort_state = {"col": None, "rev": False}
+        def _sort(col):
+            rev = (not sort_state["rev"]) if sort_state["col"] == col else False
+            sort_state["col"], sort_state["rev"] = col, rev
+            def key(v):
+                if col == "id":
+                    try: return (0, int(v))
+                    except Exception: return (1, str(v).lower())
+                if col == "date":
+                    try: return (0, datetime.strptime(v, "%d/%m/%Y %H:%M"))
+                    except Exception: return (1, str(v))
+                return (0, str(v).lower())
+            items = sorted(((tree.set(k, col), k) for k in tree.get_children("")),
+                           key=lambda t: key(t[0]), reverse=rev)
+            for pos, (_, k) in enumerate(items):
+                tree.move(k, "", pos)
+            for cc in cols:
+                arrow = ("  ▲" if not rev else "  ▼") if cc == col else ""
+                tree.heading(cc, text=headers[cc] + arrow)
         for cc in cols:
-            tree.heading(cc, text=cc.replace("_", " ").title())
+            tree.heading(cc, text=headers[cc], command=lambda cc=cc: _sort(cc))
             tree.column(cc, width=widths[cc], anchor="w")
         tree.pack(fill="both", expand=True, padx=14, pady=4)
         def load_rows():
