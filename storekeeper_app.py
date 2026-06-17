@@ -520,7 +520,7 @@ class StorekeeperApp:
         self._members         = list(TEAM_MEMBERS)
         self._seen_rejected   = set()  # track after() timer to prevent leaks
 
-        self.root.title("Asset Manager — Storekeeper")
+        self.root.title(f"Asset Manager — Storekeeper   (v{APP_VERSION})")
         self.root.geometry("1120x740")
         self.root.configure(bg=BG)
         self.root.resizable(True, True)
@@ -552,6 +552,27 @@ class StorekeeperApp:
             self.root.after(0, lambda: self._prompt_update(latest, url))
         except Exception:
             pass
+
+    def _manual_update_check(self):
+        """User-initiated check (button). Reports up-to-date / behind / unreachable."""
+        def work():
+            try:
+                r = api("get", f"{self.server_url}/version", timeout=6)
+                if not r.ok:
+                    self.root.after(0, lambda: messagebox.showwarning(
+                        "Check for Updates", f"Server returned {r.status_code}."))
+                    return
+                d = r.json(); latest = d.get("latest", "")
+                if latest and _ver_tuple(latest) > _ver_tuple(APP_VERSION):
+                    dl = d.get("download_path", ""); url = f"{self.server_url}{dl}" if dl else ""
+                    self.root.after(0, lambda: self._prompt_update(latest, url))
+                else:
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "Up to Date", f"You're on the latest version (v{APP_VERSION})."))
+            except Exception:
+                self.root.after(0, lambda: messagebox.showwarning(
+                    "Check for Updates", "Couldn't reach the server to check for updates."))
+        threading.Thread(target=work, daemon=True).start()
 
     def _prompt_update(self, latest, url):
         st = _load_update_state()
@@ -804,6 +825,11 @@ class StorekeeperApp:
                   bg=CARD, fg=SUBTEXT, font=("Segoe UI", 8),
                   relief="flat", cursor="hand2",
                   command=self._open_settings,
+                  activebackground=CARD).pack(side="bottom", pady=(0, 2))
+        tk.Button(panel, text=f"🔄  Check for Updates   (v{APP_VERSION})",
+                  bg=CARD, fg=SUBTEXT, font=("Segoe UI", 8),
+                  relief="flat", cursor="hand2",
+                  command=self._manual_update_check,
                   activebackground=CARD).pack(side="bottom", pady=(0, 2))
 
     # ── History panel ─────────────────────────────────────────────────────────

@@ -626,6 +626,26 @@ class NotifierApp:
             latest, url = res
             self.root.after(0, lambda: self._prompt_update(latest, url))
 
+    def _manual_update_check(self, icon=None, item=None):
+        """User-initiated check from the tray menu."""
+        def work():
+            try:
+                r = api("get", f"{self.server_url}/version", timeout=6)
+                if r.ok:
+                    d = r.json(); latest = d.get("latest", "")
+                    if latest and _ver_tuple(latest) > _ver_tuple(APP_VERSION):
+                        dl = d.get("download_path", ""); url = f"{self.server_url}{dl}" if dl else ""
+                        self.root.after(0, lambda: self._prompt_update(latest, url))
+                        return
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "Up to Date", f"You're on the latest version (v{APP_VERSION})."))
+                    return
+            except Exception:
+                pass
+            self.root.after(0, lambda: messagebox.showwarning(
+                "Check for Updates", "Couldn't reach the server to check for updates."))
+        threading.Thread(target=work, daemon=True).start()
+
     def _prompt_update(self, latest, url):
         st = _load_update_state()
         count = st.get("count", 0) if st.get("version") == latest else 0
@@ -743,9 +763,11 @@ class NotifierApp:
         menu = pystray.Menu(
             pystray.MenuItem(f"Asset Notifier  —  {self.current_user}",
                              None, enabled=False),
+            pystray.MenuItem(f"Version {APP_VERSION}", None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("📋  View My History",  self._open_dashboard),
             pystray.MenuItem("🔔  Check Now",         self._check_now),
+            pystray.MenuItem("⬆  Check for Updates",  self._manual_update_check),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("⚙  Settings (Admin)",  self._open_settings),
             pystray.MenuItem("❌  Exit",              self._quit),
