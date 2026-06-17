@@ -109,6 +109,25 @@ def _ver_tuple(s):
     except Exception:
         return (0,)
 
+MAX_LATER = 5                       # postpones allowed before the update is forced
+UPDATE_STATE_PATH = os.path.join(BASE_DIR, "update_state.json")
+
+def _load_update_state():
+    try:
+        if os.path.exists(UPDATE_STATE_PATH):
+            with open(UPDATE_STATE_PATH, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _save_update_state(d):
+    try:
+        with open(UPDATE_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(d, f)
+    except Exception:
+        pass
+
 # ─── Date Range Export Dialog ─────────────────────────────────────────────────
 
 class ExportDialog:
@@ -535,19 +554,66 @@ class StorekeeperApp:
             pass
 
     def _prompt_update(self, latest, url):
-        msg = (f"A newer version of the Storekeeper app is available "
-               f"(v{latest} — you have v{APP_VERSION}).\n\n")
-        if url:
-            if messagebox.askyesno("Update Available",
-                                   msg + "Open the download now? After it downloads, "
-                                         "run AssetManager_Setup.exe to update."):
-                try:
-                    webbrowser.open(url)
-                except Exception:
-                    pass
-        else:
+        st = _load_update_state()
+        count = st.get("count", 0) if st.get("version") == latest else 0
+
+        if count >= MAX_LATER and url:
+            self._forced_update(latest, url)
+            return
+
+        if not url:
             messagebox.showinfo("Update Available",
-                                msg + "Please contact your admin to update.")
+                f"A newer version (v{latest}) is available — you have v{APP_VERSION}.\n\n"
+                "Please contact your admin to update.")
+            return
+
+        remaining = MAX_LATER - count
+        if messagebox.askyesno("Update Available",
+                f"A newer version of the Storekeeper app is available "
+                f"(v{latest} — you have v{APP_VERSION}).\n\n"
+                f"You can postpone {remaining} more time(s) before the update is required.\n\n"
+                "Update now?  (Yes = download • No = remind me later)"):
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+        else:
+            _save_update_state({"version": latest, "count": count + 1})
+
+    def _forced_update(self, latest, url):
+        """Final, non-dismissable prompt after the postpone limit is reached.
+        Downloading then closes the app so the old version can't keep being used."""
+        win = tk.Toplevel(self.root)
+        win.title("Update Required")
+        win.configure(bg=BG)
+        win.geometry("440x250")
+        win.grab_set()
+        win.transient(self.root)
+        try:
+            win.attributes("-topmost", True)
+        except Exception:
+            pass
+        win.protocol("WM_DELETE_WINDOW", lambda: None)   # cannot be closed
+        tk.Label(win, text="⚠  Update Required", bg=DANGER, fg="white",
+                 font=("Segoe UI", 12, "bold")).pack(fill="x", ipady=10)
+        tk.Label(win, text=(f"You've postponed this update {MAX_LATER} times.\n\n"
+                            f"Version v{latest} is now required (you have v{APP_VERSION}).\n\n"
+                            "Click below to download it. The app will close so you can run\n"
+                            "AssetManager_Setup.exe and finish updating."),
+                 bg=BG, fg=TEXT, font=("Segoe UI", 9), justify="left",
+                 wraplength=400).pack(padx=18, pady=14)
+
+        def go():
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+            _save_update_state({"version": latest, "count": MAX_LATER})
+            self.root.after(400, self.root.destroy)
+
+        tk.Button(win, text="⬇  Download & Install Now", bg=ACCENT, fg="white",
+                  font=("Segoe UI", 10, "bold"), relief="flat", cursor="hand2",
+                  pady=9, command=go, activebackground=ACCENT2).pack(fill="x", padx=18, pady=(0, 12))
 
     def _setup_styles(self):
         s = ttk.Style()

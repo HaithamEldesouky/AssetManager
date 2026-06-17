@@ -8,4 +8,7 @@ output/
 config.json
 admin_config.json
 server_config.json
+pending_buffer.json
+seen_rejections.json
+update_state.json
 .claude/
