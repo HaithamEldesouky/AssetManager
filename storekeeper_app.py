@@ -826,11 +826,6 @@ class StorekeeperApp:
                   relief="flat", cursor="hand2",
                   command=self._open_settings,
                   activebackground=CARD).pack(side="bottom", pady=(0, 2))
-        tk.Button(panel, text=f"🔄  Check for Updates   (v{APP_VERSION})",
-                  bg=CARD, fg=SUBTEXT, font=("Segoe UI", 8),
-                  relief="flat", cursor="hand2",
-                  command=self._manual_update_check,
-                  activebackground=CARD).pack(side="bottom", pady=(0, 2))
 
     # ── History panel ─────────────────────────────────────────────────────────
 
@@ -855,6 +850,11 @@ class StorekeeperApp:
                   relief="flat", cursor="hand2", padx=10, pady=5,
                   command=self._refresh_transactions,
                   activebackground=INPUT_BG).pack(side="right")
+        tk.Button(hdr, text="🔄  Check for Updates",
+                  bg=CARD2, fg=TEXT, font=("Segoe UI", 9),
+                  relief="flat", cursor="hand2", padx=10, pady=5,
+                  command=self._manual_update_check,
+                  activebackground=INPUT_BG).pack(side="right", padx=(0, 6))
 
         # ── Filter / Sort toolbar ─────────────────────────────────────────────
         toolbar = tk.Frame(panel, bg=CARD2, padx=10, pady=7)
