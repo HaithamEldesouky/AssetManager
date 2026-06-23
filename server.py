@@ -1563,6 +1563,19 @@ if HAS_WIN32SVC:
             )
 
 
+def _launched_by_scm():
+    """True if this process was started by the Windows Service Control Manager.
+    Services run in session 0; an interactive double-click runs in session >= 1.
+    Lets one exe be both the SCM-run service and the double-click GUI."""
+    try:
+        sid = ctypes.c_ulong()
+        ctypes.windll.kernel32.ProcessIdToSessionId(
+            ctypes.windll.kernel32.GetCurrentProcessId(), ctypes.byref(sid))
+        return sid.value == 0
+    except Exception:
+        return False
+
+
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
@@ -1577,6 +1590,13 @@ if __name__ == '__main__':
         else:
             print("pywin32 is not installed — Windows Service mode unavailable.")
             sys.exit(1)
+    elif HAS_WIN32SVC and len(sys.argv) == 1 and _launched_by_scm():
+        # Started by the Windows Service Control Manager (session 0) — hand off to
+        # the service dispatcher so the SCM tracks it as Running. Without this the
+        # exe would fall through to GUI mode and the SCM would mark it Stopped.
+        servicemanager.Initialize()
+        servicemanager.PrepareToHostSingle(AssetManagerService)
+        servicemanager.StartServiceCtrlDispatcher()
     else:
         # ── Interactive GUI mode ──────────────────────────────────────────────
         # Hide the console window that appears when built without --windowed
