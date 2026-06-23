@@ -1509,6 +1509,8 @@ def _run_flask():
         port=PORT,
         debug=False,
         use_reloader=False,
+        threaded=True,          # serve clients concurrently — one stuck/slow
+                                # connection can't freeze the whole server
         ssl_context=ssl_ctx
     )
 
