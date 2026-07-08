@@ -10,7 +10,7 @@ import threading, time, requests, json, os, sys, ssl, webbrowser
 from requests.adapters import HTTPAdapter
 from datetime import datetime
 
-APP_VERSION = "1.6.0"   # compared against the server's /version to offer updates
+APP_VERSION = "1.6.1"   # compared against the server's /version to offer updates
 
 try:
     import pystray
@@ -257,11 +257,14 @@ class RejectReasonDialog:
 # ─── Notification Popup ───────────────────────────────────────────────────────
 
 class NotificationPopup:
-    def __init__(self, root, transaction, on_confirm, on_reject_with_reason):
+    def __init__(self, root, transaction, on_confirm, on_reject_with_reason,
+                 on_done=None, queued=0):
         self.root        = root
         self.trans       = transaction
         self.on_confirm  = on_confirm
         self.on_reject_r = on_reject_with_reason
+        self.on_done     = on_done
+        self.queued      = queued
         self.countdown   = 60
 
         self.win = tk.Toplevel(root)
@@ -340,8 +343,9 @@ class NotificationPopup:
                   command=self._reject,
                   activebackground="#c62828").pack(side="left")
 
+        _qtxt = f"{self.queued} more waiting" if self.queued else "Awaiting your response"
         self.timer_lbl = tk.Label(btn_f,
-                                  text="Awaiting your response",
+                                  text=_qtxt,
                                   bg=CARD2, fg=SUBTEXT, font=("Segoe UI", 8))
         self.timer_lbl.pack(side="right")
 
@@ -359,6 +363,8 @@ class NotificationPopup:
     def _confirm(self):
         self.on_confirm(self.trans['id'])
         self.win.destroy()
+        if self.on_done:
+            self.on_done()
 
     def _reject(self):
         # Hide popup first, show reason dialog
@@ -367,6 +373,8 @@ class NotificationPopup:
             self.on_reject_r(self.trans['id'], reason)
             try: self.win.destroy()
             except: pass
+            if self.on_done:
+                self.on_done()
 
         def on_cancel():
             # Reason dialog cancelled — restore popup
@@ -610,6 +618,8 @@ class NotifierApp:
         self.current_user = self.cfg["current_user"]
         self.poll_secs    = int(self.cfg.get("poll_interval", 15))
         self.notified_ids = set()
+        self._popup_queue    = []     # pending transactions waiting to be shown
+        self._current_popup  = None   # only one popup on screen at a time
         self.running      = True
         self.tray_icon    = None
 
@@ -732,18 +742,32 @@ class NotifierApp:
                         f"Asset Notifier  ({len(pending)} pending)"
                         if has_p else "Asset Notifier"
                     )
-                for t in pending:
-                    if t['id'] not in self.notified_ids:
-                        self.notified_ids.add(t['id'])
-                        self.root.after(0, lambda tx=t: self._show_popup(tx))
+                new = [t for t in pending if t['id'] not in self.notified_ids]
+                for t in new:
+                    self.notified_ids.add(t['id'])
+                    self._popup_queue.append(t)
+                if new:
+                    self.root.after(0, self._show_next_popup)
         except: pass
 
-    def _show_popup(self, transaction):
-        NotificationPopup(
-            self.root, transaction,
+    def _show_next_popup(self):
+        # Show one popup at a time; the next appears only after the current is
+        # confirmed/rejected — so a bulk scan doesn't flood the screen with
+        # stacked, flashing windows.
+        if self._current_popup is not None or not self._popup_queue:
+            return
+        tx = self._popup_queue.pop(0)
+        self._current_popup = NotificationPopup(
+            self.root, tx,
             on_confirm=self._confirm,
-            on_reject_with_reason=self._reject
+            on_reject_with_reason=self._reject,
+            on_done=self._popup_finished,
+            queued=len(self._popup_queue),
         )
+
+    def _popup_finished(self):
+        self._current_popup = None
+        self.root.after(300, self._show_next_popup)
 
     def _confirm(self, tid):
         try: api("post", f"{self.server_url}/confirm/{tid}")
