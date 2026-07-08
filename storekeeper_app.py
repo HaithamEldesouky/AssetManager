@@ -9,7 +9,7 @@ import requests, json, os, sys, threading, ssl, webbrowser
 from requests.adapters import HTTPAdapter
 from datetime import datetime, date
 
-APP_VERSION = "1.6.0"   # compared against the server's /version to offer updates
+APP_VERSION = "1.6.1"   # compared against the server's /version to offer updates
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 

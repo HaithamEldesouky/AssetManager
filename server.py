@@ -36,7 +36,7 @@ def _make_server_tray_icon():
     d.ellipse([42, 44, 58, 60], fill=(76, 175, 80))  # green dot = running
     return img
 
-APP_VERSION = "1.6.0"   # bump when releasing a new build; clients compare against this
+APP_VERSION = "1.6.1"   # bump when releasing a new build; clients compare against this
 
 app = Flask(__name__)
 CORS(app)
