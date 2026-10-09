@@ -1,0 +1,32 @@
+# Vendored into lib\ by tools/vendor.ps1 for the server.
+#
+# Kept separate from the client list: shipping Flask to an engineer's laptop, or
+# pystray to a headless IIS worker, is weight with no purpose. Pinned for the
+# same reason as the client list.
+#
+# pywin32 is what makes the Windows Service verbs (install/start/stop/remove)
+# work. It is the one dependency that does not fully survive `pip install
+# --target`: its DLLs normally land in the interpreter directory via a
+# postinstall step that --target skips. Under IIS this does not matter - the
+# server runs `run_server.py serve` and never touches the service layer (see
+# ADR-0001) - and server.py already degrades gracefully, guarding the import
+# behind HAS_WIN32SVC and printing a clear message for a service verb it cannot
+# honour. A source-mode install that genuinely needs the service should have
+# pywin32 installed into the interpreter instead.
+flask==3.1.3
+flask-cors==6.0.5
+openpyxl==3.1.5
+pystray==0.19.5
+pillow==12.3.0
+pywin32==312
+
+# X.509 generation, for the certificate the console stages (C1,
+# ADR-0020). Not here before that: nothing on a server needed to *make* a
+# certificate, only to serve one and to fingerprint it, and _cert_fingerprint
+# reads the DER between the PEM markers with base64 and hashlib. A rotation
+# that begins by binding strands every pinned client (rule 1), so the new
+# certificate has to be generated where the old one is still being served -
+# which is this process. Guarded at the call site like pillow is: an install
+# whose lib\ predates this refuses that one button naming what to run
+# instead, rather than failing to start.
+cryptography==43.0.1

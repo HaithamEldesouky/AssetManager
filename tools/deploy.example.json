@@ -1,0 +1,26 @@
+{
+  "_comment": "Copy to deploy.json next to the tools scripts (or at the repo root) and edit. Read by install-iis.ps1, update.ps1 and package.ps1; every key is optional, and anything passed on the command line wins over this file. deploy.json is gitignored - the copy on asset-server is the one that matters.",
+
+  "_comment_server": "install-iis.ps1 and update.ps1. installDir is update.ps1's -TargetDir: the same directory, described once.",
+  "installDir": "C:\\AssetManager",
+  "port": 8081,
+  "siteName": "AssetManager",
+  "appPoolName": "AssetManagerPool",
+
+  "_comment_cert": "install-iis.ps1 -SelfSigned. Every name or address that could appear in a client's server_url has to be in this list, because urllib3 asserts the SAN even though the certificate is pinned by file.",
+  "selfSigned": true,
+  "certDnsNames": ["asset-server", "asset-server.example.com", "localhost"],
+  "certIpAddress": "192.0.2.100",
+
+  "_comment_update": "update.ps1. Without baseUrl there is no health check and no auto-rollback. It is not derived from port: guessing the scheme wrong would roll back a good update. There is deliberately no key here for where packages are read from. update.ps1 ships inside the server package and is installed to installDir/tools/, and it reads releases from installDir/dist/ - copy dist/<version>/ from the build machine into there and run it. -PackageDir names somewhere else for a one-off and is then the only place looked. That directory is looked at twice: the <version> subdirectory package.ps1 writes first, then the directory itself, for a zip carried on its own - and the run names which of the two answered. When neither holds the version it says what was there and asks for a directory, on a run with somebody at the console. A packageDir or distDir still set here is warned about by name, because a machine that had been updating out of one would otherwise start reading from somewhere else in silence.",
+  "baseUrl": "https://asset-server:8081",
+
+  "_comment_package": "package.ps1, on the BUILD machine. distDir is its ship root: everything releasable goes into distDir/<version>/ - the server source zip and AssetManager_Setup.exe - and nothing anywhere else. Leave it null for dist/ in the checkout, which is what a build machine wants; it is not update.ps1's key any more, so a server has no reason to set it. certPath is the PUBLIC certificate the SERVER package ships, so an install that already serves HTTPS carries its own certificate through an update; point it at the server installDir/ssl_cert.pem, which is the certificate install-iis.ps1 actually bound, because a build machine copy is easily an older one. With nothing there it falls back to installDir/ssl_cert.pem and then to GET baseUrl/cert (printing the fingerprint to check), and where none of them answers it ships none and says so rather than failing - a client with no certificate confirms the server fingerprint on first contact instead (ADR-0010), and an install that already has one keeps it. It never generates a certificate: a key minted on the build machine is not the key the server binds, and install-iis.ps1 -SelfSigned mints and binds on the server itself. The CLIENT installer ships no certificate at all - drop a copy of ssl_cert.pem next to AssetManager_Setup.exe to supply one quietly. Packaging refuses anything carrying a private key, fetched or not. AllowDirty is deliberately not settable here.",
+  "distDir": null,
+  "certPath": "C:\\AssetManager\\ssl_cert.pem",
+
+  "_comment_source": "Every app ships as .py rather than .exe, so the process Windows starts is a signed pythonw.exe; the one compile left is AssetManager_Setup.exe, which carries a source payload. See docs/runbooks/source-mode.md. pythonExe is the interpreter that hosts a source install: install-iis.ps1 puts its full path in web.config, and update.ps1 and migrate.ps1 use it to run the run_server.py migrate verb. Leave it out to use whatever python resolves to - fine on a build machine, risky on a server where the app pool identity has its own PATH, so set it explicitly there. serverLibDir and clientLibDir are where vendor.ps1 wrote each role vendored dependencies; package.ps1 defaults to lib-server and lib-client and bundle-client.ps1 to lib-client, so set these only if you moved them. Two keys rather than the one libDir they replace, because the two roles pin different packages and one release carries both.",
+  "pythonExe": "C:\\Program Files\\Python312\\python.exe",
+  "serverLibDir": null,
+  "clientLibDir": null
+}

@@ -1,0 +1,14 @@
+# Vendored into lib\ by tools/vendor.ps1 for the Storekeeper and Notifier apps.
+#
+# One list for both client apps rather than one each: the Storekeeper needs
+# openpyxl for its Excel export and the Notifier needs pystray/pillow for the
+# tray icon, and carrying both in one lib costs about a megabyte while halving
+# the number of things to vendor, hash and verify.
+#
+# Pinned exactly. The package manifest hashes lib\, so an unpinned resolve would
+# make two packages built from the same commit differ - and pip on the build
+# machine may have no route to PyPI tomorrow.
+requests==2.32.3
+openpyxl==3.1.5
+pystray==0.19.5
+pillow==12.3.0
