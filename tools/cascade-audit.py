@@ -1103,7 +1103,7 @@ elif not _staged:
         "would carry no client payload")
 elif not _zipped:
     bad("package.ps1 calls bundle-client.ps1 only to stage the installer's "
-        "payload, so dist\<version>\ carries no client update packages - "
+        "payload, so dist\\<version>\\ carries no client update packages - "
         "every client is told it is behind and offered nothing to apply")
 else:
     ok("package.ps1 runs bundle-client.ps1 in both shapes - the staged payload "
